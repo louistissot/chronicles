@@ -75,6 +75,7 @@ interface SessionTabProps {
   pipelineStages: PipelineStages
   speakerReview: SpeakerReviewPayload | null
   entityReview: EntityReviewPayload | null
+  transcriptReview: import('@/lib/api').TranscriptReviewPayload | null
   logLines: Array<{ text: string; isStderr: boolean }>
   logVersion: number
   streamingChunks: Record<PipelineStage, string>
@@ -102,7 +103,7 @@ interface SessionTabProps {
 export function SessionTab({
   onSessionStarted, onRecordingStarted, onRun, isRunning, autoNewCampaign, prefillCampaignId, prefillSeasonId,
   pendingDrop, onDropHandled, dragOver, onCancelToTitle, onFunnelComplete,
-  pipelineActive, pipelineStages, speakerReview, entityReview,
+  pipelineActive, pipelineStages, speakerReview, entityReview, transcriptReview,
   logLines, logVersion, streamingChunks, streamingVersion,
   onStop, onStopLLMStage, onSkipStage,
   recordingActive, recordingPaused, recordingSeconds,
@@ -446,6 +447,7 @@ export function SessionTab({
         stages={pipelineStages}
         speakerReview={speakerReview}
         entityReview={entityReview}
+        transcriptReview={transcriptReview}
         logLines={logLines}
         logVersion={logVersion}
         streamingChunks={streamingChunks}

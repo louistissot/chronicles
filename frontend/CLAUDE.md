@@ -101,7 +101,7 @@ App.tsx
                └─► SessionDetailScreen (when selectedSession != null)
 ```
 
-Pipeline stage order: `transcription → saving_transcript → transcript_correction → speaker_mapping → updating_transcript → timeline → summary → dm_notes → character_updates → glossary → leaderboard → locations → npcs → loot → missions → scenes → illustration`
+Pipeline stage order: `transcription → saving_transcript → transcript_correction → speaker_mapping → updating_transcript → transcript_review → timeline → summary → dm_notes → character_updates → glossary → leaderboard → locations → npcs → loot → missions → scenes → illustration`
 
 Processing now shows in the **Session tab** (not Library). Library tab is simplified to session list only; clicking an active/processing session navigates to the Session tab.
 

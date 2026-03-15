@@ -362,6 +362,10 @@ class API:
         self._pending_entity_reviews = {}  # type: Dict[str, threading.Event]
         self._entity_review_decisions = {}  # type: Dict[str, list]
 
+        # Transcript review state (human-in-the-loop for transcript corrections)
+        self._pending_transcript_review = None  # type: Optional[threading.Event]
+        self._reviewed_transcript_text = None  # type: Optional[str]
+
     @property
     def _window(self) -> Optional[webview.Window]:
         return self._window_ref[0] if self._window_ref else None
@@ -1153,6 +1157,34 @@ end try
             self._notify_stage("scenes", "error", {"error": "No text transcript produced"})
             return
 
+        # ── Transcript review (human-in-the-loop) ──────────────────────
+        if "transcript_review" not in self._skipped_stages:
+            try:
+                transcript_text = Path(txt_path).read_text(encoding="utf-8")
+                self._pending_transcript_review = threading.Event()
+                self._reviewed_transcript_text = None
+                self._notify_stage("transcript_review", "needs_review", {
+                    "transcript": transcript_text,
+                    "txtPath": str(txt_path),
+                })
+                self._pending_transcript_review.wait()  # blocks until user approves
+                self._pending_transcript_review = None
+
+                # Apply corrections if user edited the transcript
+                if self._reviewed_transcript_text is not None:
+                    Path(txt_path).write_text(
+                        self._reviewed_transcript_text, encoding="utf-8"
+                    )
+                    _log.info(
+                        "Transcript corrected by user (%d chars)",
+                        len(self._reviewed_transcript_text),
+                    )
+                self._notify_stage("transcript_review", "done", None)
+            except Exception as e:
+                _log.error("Transcript review failed: %s", e, exc_info=True)
+                self._notify_stage("transcript_review", "error", {"error": str(e)})
+                # Continue anyway — don't block the pipeline on review errors
+
         self._run_llm_stages(str(txt_path), character_names)
 
     def complete_speaker_mapping(self, json_path: str, mapping: dict) -> dict:
@@ -1168,6 +1200,16 @@ end try
             args=(Path(json_path), mapping),
             daemon=True,
         ).start()
+        return {"ok": True}
+
+    def complete_transcript_review(self, corrected_text):
+        # type: (Optional[str]) -> dict
+        """Resume pipeline after user reviews/edits transcript. None = approved as-is."""
+        _log.info("complete_transcript_review  edited=%s", corrected_text is not None)
+        self._reviewed_transcript_text = corrected_text
+        event = self._pending_transcript_review
+        if event:
+            event.set()
         return {"ok": True}
 
     # ── LLM helpers (internal) ────────────────────────────────────────────────
@@ -1359,13 +1401,17 @@ end try
         with self._job_lock:
             if self._job:
                 self._job.stop()
-        all_stages = ["transcript_correction", "speaker_mapping", "updating_transcript", "timeline", "summary", "dm_notes", "character_updates", "glossary", "leaderboard", "locations", "npcs", "loot", "missions", "scenes", "illustration"]
+        all_stages = ["transcript_correction", "speaker_mapping", "updating_transcript", "transcript_review", "timeline", "summary", "dm_notes", "character_updates", "glossary", "leaderboard", "locations", "npcs", "loot", "missions", "scenes", "illustration"]
         for stage in all_stages:
             self._stop_llm_stages.add(stage)
         # Unblock any pending entity reviews to prevent zombie threads
         for event in self._pending_entity_reviews.values():
             event.set()
         self._pending_entity_reviews.clear()
+        # Unblock pending transcript review
+        if self._pending_transcript_review:
+            self._pending_transcript_review.set()
+            self._pending_transcript_review = None
 
     # ── Entity Review (Human-in-the-Loop) ─────────────────────────────────
 
@@ -1644,6 +1690,20 @@ This session took place on {session_date}. Extract information ONLY from THIS se
         # Illustration stage — uses Gemini image generation
         self._run_illustration_stage(txt_path, character_names, out_dir, transcript=transcript)
 
+        # Auto-generate session title if not already set
+        if self._current_session_id:
+            try:
+                sessions = get_sessions()
+                for s in sessions:
+                    if s["id"] == self._current_session_id:
+                        if not s.get("display_name"):
+                            result = self.generate_session_title(self._current_session_id)
+                            if result.get("ok"):
+                                _log.info("Auto-generated title: %s", result.get("title"))
+                        break
+            except Exception as e:
+                _log.error("Auto-title generation failed (non-fatal): %s", e)
+
     def _run_illustration_stage(
         self, txt_path: str, character_names: List[str], out_dir: Path,
         transcript: Optional[str] = None,
@@ -1870,9 +1930,35 @@ Do NOT include any text, labels, or UI elements in the prompt. Write ONLY the im
             try:
                 result = json.loads(block)
                 if isinstance(result, list):
-                    return result
+                    return [item for item in result if isinstance(item, dict)]
             except json.JSONDecodeError:
                 pass
+
+        # 5. Try wrapping bare {…}{…} objects in brackets
+        if stripped.startswith('{'):
+            # Join with commas, wrap in array
+            bracketed = '[' + re.sub(r'\}\s*\{', '},{', stripped) + ']'
+            bracketed = re.sub(r',\s*([}\]])', r'\1', bracketed)
+            try:
+                result = json.loads(bracketed)
+                if isinstance(result, list):
+                    return [item for item in result if isinstance(item, dict)]
+            except json.JSONDecodeError:
+                pass
+
+        # 6. Extract individual {…} objects via regex
+        objects = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', stripped)
+        if objects:
+            items = []
+            for obj_str in objects:
+                try:
+                    parsed = json.loads(obj_str)
+                    if isinstance(parsed, dict):
+                        items.append(parsed)
+                except json.JSONDecodeError:
+                    pass
+            if items:
+                return items
 
         return None
 
@@ -2198,9 +2284,12 @@ Return ONLY the JSON object. No markdown fences, no explanation.
         if merges and isinstance(merges, list):
             _log.info("Glossary LLM suggested %d merge(s): %s", len(merges), merges)
 
-        # Ensure all entries have a description field
-        for term, info in glossary.items():
-            if isinstance(info, dict) and "description" not in info:
+        # Normalise entries: LLM sometimes returns strings instead of dicts
+        for term in list(glossary.keys()):
+            info = glossary[term]
+            if not isinstance(info, dict):
+                glossary[term] = {"category": "Other", "definition": str(info), "description": ""}
+            elif "description" not in info:
                 info["description"] = ""
 
         # Save to file
@@ -2596,8 +2685,15 @@ Return ONLY a valid JSON array (no markdown, no explanation):
 
     def _save_npcs(self, text: str, out_dir: Path) -> None:
         npcs = self._repair_json_array(text)
-        if npcs is None:
+        if npcs is None or len(npcs) == 0:
             _log.error("NPCs JSON parse failed for text: %s…", text[:200])
+            (out_dir / "npcs.raw").write_text(text, encoding="utf-8")
+            self._notify_stage("npcs", "error", {"error": "Could not parse NPCs JSON. Raw output saved."})
+            return
+        # Filter to dicts only (defensive against malformed items)
+        npcs = [n for n in npcs if isinstance(n, dict)]
+        if not npcs:
+            _log.error("NPCs JSON contained no valid dict items")
             (out_dir / "npcs.raw").write_text(text, encoding="utf-8")
             self._notify_stage("npcs", "error", {"error": "Could not parse NPCs JSON. Raw output saved."})
             return
