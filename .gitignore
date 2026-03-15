@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.spec.bak
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# PyInstaller output
+dist/
+build/
+
+# App config (user data, never commit)
+# ~/.config/dnd-whisperx/ is outside the repo, but just in case:
+prefs.json
+sessions.json
+campaigns.json
+app.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

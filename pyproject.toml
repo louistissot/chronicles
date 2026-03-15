@@ -1,0 +1,36 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--tb=short"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "UP",   # pyupgrade (but respects target-version = py39)
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "I",    # isort
+]
+ignore = [
+    "E501",   # line too long — handled by line-length setting
+    "E741",   # ambiguous variable name (l, O, I)
+    "B008",   # function call in default argument
+    "SIM105", # contextlib.suppress instead of try/except/pass — readability preference
+    "SIM108", # ternary instead of if/else — readability preference
+    "SIM115", # context manager for open — not always practical in class state
+    "UP006",  # use list instead of List — requires Python 3.10+
+    "UP007",  # use X | Y instead of Union — requires Python 3.10+
+    "UP035",  # typing.List deprecated — requires Python 3.10+
+]
+
+[tool.ruff.lint.per-file-ignores]
+"app.py" = ["ALL"]  # legacy dead code, don't lint
+"make_icon.py" = ["F841"]  # unused named vars for readability in geometry code
+"runner.py" = ["E402"]  # import after platform check is intentional
+"tests/*" = ["B", "SIM"]  # relax bugbear/simplify in tests

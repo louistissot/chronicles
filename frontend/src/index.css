@@ -1,0 +1,316 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Frameless window: draggable titlebar region */
+.app-drag { -webkit-app-region: drag; }
+.app-no-drag { -webkit-app-region: no-drag; }
+
+@layer base {
+  :root {
+    /* shadcn color vars – dark (default) */
+    --background: 228 40% 6%;
+    --foreground: 40 40% 88%;
+    --card: 228 35% 9%;
+    --card-foreground: 40 40% 88%;
+    --popover: 228 38% 8%;
+    --popover-foreground: 40 40% 88%;
+    --primary: 44 65% 53%;
+    --primary-foreground: 228 40% 6%;
+    --secondary: 228 25% 14%;
+    --secondary-foreground: 40 30% 75%;
+    --muted: 228 30% 12%;
+    --muted-foreground: 228 15% 50%;
+    --accent: 263 74% 57%;
+    --accent-foreground: 40 40% 88%;
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 40 40% 88%;
+    --border: 228 20% 18%;
+    --input: 228 25% 14%;
+    --ring: 44 65% 53%;
+    --radius: 0.5rem;
+    /* custom theme tokens – dark */
+    --parchment: 232 220 200;   /* #E8DCC8 */
+    --void:      8   11  20;    /* #080B14 */
+    --abyss:     13  17  32;    /* #0D1120 */
+    --shadow:    18  23  42;    /* #12172A */
+  }
+
+  /* ── Light theme ───────────────────────────────────────────────── */
+  .light {
+    /* shadcn vars */
+    --background: 40 35% 93%;
+    --foreground: 25 55% 10%;
+    --card: 40 30% 96%;
+    --card-foreground: 25 55% 10%;
+    --popover: 40 35% 97%;
+    --popover-foreground: 25 55% 10%;
+    --primary: 44 60% 44%;
+    --primary-foreground: 40 35% 97%;
+    --secondary: 40 20% 87%;
+    --secondary-foreground: 25 40% 20%;
+    --muted: 40 25% 89%;
+    --muted-foreground: 25 30% 40%;
+    --accent: 263 60% 48%;
+    --accent-foreground: 40 35% 97%;
+    --destructive: 0 65% 42%;
+    --destructive-foreground: 40 35% 97%;
+    --border: 38 22% 76%;
+    --input: 40 22% 88%;
+    --ring: 44 60% 44%;
+    /* custom tokens – light */
+    --parchment: 26  18   8;    /* #1A1208 – dark brown text */
+    --void:      245 240 225;   /* #F5F0E1 – warm cream bg */
+    --abyss:     238 232 215;   /* #EEE8D7 */
+    --shadow:    228 222 202;   /* #E4DECA */
+  }
+
+  /* Smooth theme transition */
+  html { transition: background-color 0.25s ease; }
+  *, *::before, *::after { transition: background-color 0.25s ease, border-color 0.25s ease, color 0.15s ease; }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: #080B14;
+    color: #E8DCC8;
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  #root {
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(212, 175, 55, 0.2);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(212, 175, 55, 0.4);
+  }
+}
+
+@layer utilities {
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+  .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+}
+
+@layer components {
+  .font-display {
+    font-family: 'Cinzel Decorative', serif;
+  }
+  .font-heading {
+    font-family: 'Cinzel', serif;
+  }
+  .font-body {
+    font-family: 'Inter', sans-serif;
+  }
+
+  .glow-gold {
+    text-shadow: 0 0 8px rgba(212, 175, 55, 0.6), 0 0 20px rgba(212, 175, 55, 0.3);
+  }
+
+  .glow-gold-strong {
+    text-shadow: 0 0 12px rgba(212, 175, 55, 0.8), 0 0 30px rgba(212, 175, 55, 0.4), 0 0 60px rgba(212, 175, 55, 0.15);
+  }
+
+  .border-gold-glow {
+    box-shadow: 0 0 0 1px rgba(212, 175, 55, 0.3), 0 0 12px rgba(212, 175, 55, 0.1);
+  }
+
+  .ornament-line {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .ornament-line::before,
+  .ornament-line::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.4), transparent);
+  }
+
+  .tab-active-glow {
+    box-shadow: 0 0 12px rgba(212, 175, 55, 0.15), inset 0 -1px 0 rgba(212, 175, 55, 0.4);
+  }
+
+  .card-arcane {
+    background: linear-gradient(135deg, rgba(124, 58, 237, 0.06) 0%, rgba(12, 15, 35, 0.8) 100%);
+    border: 1px solid rgba(124, 58, 237, 0.2);
+  }
+
+  .parchment-scroll {
+    background: linear-gradient(180deg, rgba(232, 220, 200, 0.04) 0%, transparent 100%);
+    border: 1px solid rgba(232, 220, 200, 0.08);
+  }
+}
+
+/* Animations */
+@keyframes glow-pulse {
+  0%, 100% { text-shadow: 0 0 8px rgba(212, 175, 55, 0.6), 0 0 20px rgba(212, 175, 55, 0.3); }
+  50% { text-shadow: 0 0 16px rgba(212, 175, 55, 0.9), 0 0 40px rgba(212, 175, 55, 0.5), 0 0 60px rgba(212, 175, 55, 0.2); }
+}
+
+@keyframes flicker {
+  0%, 19.999%, 22%, 62.999%, 64%, 64.999%, 70%, 100% { opacity: 1; }
+  20%, 21.999%, 63%, 63.999%, 65%, 69.999% { opacity: 0.4; }
+}
+
+.animate-glow-pulse { animation: glow-pulse 3s ease-in-out infinite; }
+.animate-flicker { animation: flicker 8s step-end infinite; }
+
+/* Light mode: override parchment text classes — boosted for readability on cream */
+/* Dark-on-light needs higher alpha than light-on-dark to maintain contrast */
+.light .text-parchment    { color: rgba(26, 18,  8, 1)    !important; }
+.light .text-parchment\/85 { color: rgba(26, 18,  8, 0.90) !important; }
+.light .text-parchment\/80 { color: rgba(26, 18,  8, 0.85) !important; }
+.light .text-parchment\/75 { color: rgba(26, 18,  8, 0.80) !important; }
+.light .text-parchment\/70 { color: rgba(26, 18,  8, 0.75) !important; }
+.light .text-parchment\/60 { color: rgba(26, 18,  8, 0.70) !important; }
+.light .text-parchment\/55 { color: rgba(26, 18,  8, 0.65) !important; }
+.light .text-parchment\/50 { color: rgba(26, 18,  8, 0.60) !important; }
+.light .text-parchment\/40 { color: rgba(26, 18,  8, 0.55) !important; }
+.light .text-parchment\/35 { color: rgba(26, 18,  8, 0.50) !important; }
+.light .text-parchment\/30 { color: rgba(26, 18,  8, 0.45) !important; }
+.light .text-parchment\/25 { color: rgba(26, 18,  8, 0.38) !important; }
+.light .text-parchment\/20 { color: rgba(26, 18,  8, 0.30) !important; }
+.light .text-parchment\/15 { color: rgba(26, 18,  8, 0.22) !important; }
+
+/* Light mode: placeholder text override */
+.light input::placeholder,
+.light textarea::placeholder { color: rgba(26, 18, 8, 0.42) !important; }
+
+/* Light mode: darken gold for contrast on cream backgrounds */
+.light .text-gold         { color: #8B7228 !important; }
+.light .text-gold\/70     { color: rgba(139, 114, 40, 0.85) !important; }
+.light .text-gold\/40     { color: rgba(139, 114, 40, 0.55) !important; }
+.light .text-gold\/30     { color: rgba(139, 114, 40, 0.50) !important; }
+.light .border-gold\/25   { border-color: rgba(139, 114, 40, 0.30) !important; }
+.light .border-gold\/20   { border-color: rgba(139, 114, 40, 0.25) !important; }
+.light .border-gold\/30   { border-color: rgba(139, 114, 40, 0.35) !important; }
+.light .glow-gold         { text-shadow: none !important; }
+.light .glow-gold-strong  { text-shadow: none !important; }
+.light .border-gold-glow  { box-shadow: 0 0 0 1px rgba(139, 114, 40, 0.2) !important; }
+
+/* Light mode: override parchment border classes */
+.light .border-parchment\/40 { border-color: rgba(26, 18, 8, 0.40) !important; }
+.light .border-parchment\/20 { border-color: rgba(26, 18, 8, 0.20) !important; }
+
+/* Light mode: override shadow/abyss/void Tailwind classes (compiled with hardcoded dark values) */
+.light .bg-shadow    { background-color: rgba(255, 253, 246, 1)   !important; } /* inputs/tabs: near-white */
+.light .bg-shadow\/60 { background-color: rgba(228, 222, 202, 0.6) !important; } /* main panel */
+.light .bg-abyss     { background-color: rgba(255, 253, 246, 1)   !important; } /* dropdowns */
+.light .bg-void\/60  { background-color: rgba(238, 232, 215, 0.6) !important; }
+.light .bg-void\/80  { background-color: rgba(238, 232, 215, 0.8) !important; }
+
+/* Light mode: flip white-overlay utils to black-overlay equivalents */
+.light .bg-white\/2  { background-color: rgba(0,0,0,0.025) !important; }
+.light .bg-white\/3  { background-color: rgba(0,0,0,0.03)  !important; }
+.light .bg-white\/5  { background-color: rgba(0,0,0,0.05)  !important; }
+.light .bg-white\/6  { background-color: rgba(0,0,0,0.06)  !important; }
+.light .bg-white\/8  { background-color: rgba(0,0,0,0.08)  !important; }
+.light .bg-white\/10 { background-color: rgba(0,0,0,0.10)  !important; }
+.light .hover\:bg-white\/5:hover { background-color: rgba(0,0,0,0.05) !important; }
+.light .border-white\/6  { border-color: rgba(0,0,0,0.07)  !important; }
+.light .border-white\/8  { border-color: rgba(0,0,0,0.09)  !important; }
+.light .border-white\/10 { border-color: rgba(0,0,0,0.11)  !important; }
+.light .border-white\/12 { border-color: rgba(0,0,0,0.12)  !important; }
+.light .border-white\/15 { border-color: rgba(0,0,0,0.15)  !important; }
+.light .border-white\/20 { border-color: rgba(0,0,0,0.18)  !important; }
+.light body { background-color: #F5F0E1; }
+.light .card-arcane {
+  background: linear-gradient(135deg, rgba(124,58,237,0.04) 0%, rgba(245,240,225,0.9) 100%);
+  border: 1px solid rgba(124,58,237,0.15);
+}
+.light .parchment-scroll {
+  background: linear-gradient(180deg, rgba(26,18,8,0.04) 0%, transparent 100%);
+  border: 1px solid rgba(26,18,8,0.08);
+}
+.light .tab-active-glow {
+  box-shadow: 0 0 12px rgba(180,148,14,0.12), inset 0 -1px 0 rgba(180,148,14,0.4);
+}
+
+/* Title screen — kept animations */
+@keyframes title-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-title-rise { animation: title-rise 0.8s ease-out forwards; }
+
+/* ── Tiptap Rich Text Editor ─────────────────────────────────────── */
+
+.tiptap-content .tiptap {
+  outline: none;
+  font-family: 'Crimson Text', serif;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--color-parchment, #E8DFC0);
+  opacity: 0.7;
+}
+
+.tiptap-content .tiptap p {
+  margin: 0.25em 0;
+}
+
+.tiptap-content .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--color-parchment, #E8DFC0);
+  opacity: 0.25;
+  pointer-events: none;
+  height: 0;
+}
+
+.tiptap-content .tiptap ul,
+.tiptap-content .tiptap ol {
+  padding-left: 1.25em;
+  margin: 0.25em 0;
+}
+
+.tiptap-content .tiptap ul { list-style-type: disc; }
+.tiptap-content .tiptap ol { list-style-type: decimal; }
+
+.tiptap-content .tiptap li { margin: 0.1em 0; }
+
+.tiptap-content .tiptap strong { font-weight: 700; }
+.tiptap-content .tiptap em { font-style: italic; }
+
+/* Light mode overrides */
+.light .tiptap-content .tiptap {
+  color: #3a3520;
+  opacity: 0.8;
+}
+
+.light .tiptap-content .tiptap p.is-editor-empty:first-child::before {
+  color: #3a3520;
+  opacity: 0.3;
+}
+
+/* Rich text display (rendered HTML from editor) */
+.rich-text-display ul { list-style-type: disc; padding-left: 1.25em; }
+.rich-text-display ol { list-style-type: decimal; padding-left: 1.25em; }
+.rich-text-display p { margin: 0.15em 0; }
+.rich-text-display strong { font-weight: 700; }
+.rich-text-display em { font-style: italic; }
