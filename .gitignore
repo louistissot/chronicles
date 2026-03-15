@@ -44,3 +44,4 @@ app.log
 .idea/
 *.swp
 *.swo
+.claude/
