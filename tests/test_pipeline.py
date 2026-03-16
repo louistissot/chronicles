@@ -72,6 +72,8 @@ def _run_continue_pipeline(api: backend.API, json_path: Path, mapping: dict):
         original_notify(stage, status, data)
 
     api._notify_stage = capturing_notify
+    # Skip transcript_review to avoid blocking on threading.Event.wait()
+    api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"transcript_review"}
 
     with patch.object(api, "_run_llm_stages", return_value=None):
         api._continue_pipeline(json_path, mapping)
@@ -116,6 +118,7 @@ class TestContinuePipelineStageOrder:
                 order.append("notify_done")
             original_notify(stage, status, data)
         api._notify_stage = tracking_notify
+        api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"transcript_review"}
 
         real_save_all = postprocess.save_all
 
@@ -162,6 +165,7 @@ class TestContinuePipelineMissingJSON:
             original(stage, status, data)
 
         api._notify_stage = cap
+        api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"transcript_review"}
         with patch.object(api, "_run_llm_stages", return_value=None):
             api._continue_pipeline(missing, MAPPING)
 
@@ -199,6 +203,7 @@ class TestContinuePipelineSaveAllFailure:
             original(stage, status, data)
 
         api._notify_stage = cap
+        api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"transcript_review"}
         with patch.object(backend, "save_all", side_effect=exc):
             with patch.object(api, "_run_llm_stages", return_value=None):
                 api._continue_pipeline(json_path, MAPPING)

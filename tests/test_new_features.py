@@ -66,8 +66,10 @@ class TestRepairJsonArray:
     def test_empty_string_returns_none(self):
         assert self._repair("") is None
 
-    def test_object_not_array_returns_none(self):
-        assert self._repair('{"key": "value"}') is None
+    def test_bare_object_wrapped_in_array(self):
+        # Bare JSON object is now recovered as a single-element array
+        result = self._repair('{"key": "value"}')
+        assert result == [{"key": "value"}]
 
     def test_nested_trailing_commas(self):
         text = '[{"items": [1, 2, 3,], "name": "test",},]'

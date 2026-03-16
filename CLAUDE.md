@@ -107,38 +107,44 @@ Audio file (.m4a/.mp3/etc.)
   [5] updating_transcript ── postprocess.py applies mapping → labeled .txt + .srt
        │
        ▼
-  [6] timeline ──────────── LLM: event timeline (JSON array, 8–15 key moments)
+  [6] transcript_review ─── human-in-the-loop: user reviews/edits labeled transcript
+       │                      └─► pipeline blocks (threading.Event) until user approves
+       │                      └─► user can fix speaker attributions and misheard words
+       │                      └─► corrected text overwrites .txt file before LLM stages
+       │                      └─► complete_transcript_review(corrected_text) resumes pipeline
+       ▼
+  [7] timeline ──────────── LLM: event timeline (JSON array, 8–15 key moments)
        │
        ▼
-  [7] summary ───────────── LLM: prose narrative recap
+  [8] summary ───────────── LLM: prose narrative recap
        │
        ▼
-  [8] dm_notes ──────────── LLM: structured DM notes (hooks, NPCs, loose ends)
+  [9] dm_notes ──────────── LLM: structured DM notes (hooks, NPCs, loose ends)
        │
        ▼
-  [9] character_updates ─── LLM: per-character + NPC development updates (JSON object)
+ [10] character_updates ─── LLM: per-character + NPC development updates (JSON object)
        │                      └─► skipped if no character IDs in session
        │                      └─► also generates history entries for campaign NPCs that appear in transcript
        ▼
- [10] glossary ─────────── LLM: extracts NPCs, locations, factions, items, spells from transcript
+ [11] glossary ─────────── LLM: extracts NPCs, locations, factions, items, spells from transcript
        │                      └─► smart-merges into campaign glossary (adds new + updates enriched definitions/descriptions)
        │                      └─► LLM deduplication via _merges directives (merge variant terms)
        │                      └─► _sync_npcs_from_glossary: auto-creates/updates NPC characters from NPC glossary entries
        ▼
- [11] leaderboard ────────── LLM: per-hero combat stats (kills, assists, damage, d20 avg, nat 20s/1s)
+ [12] leaderboard ────────── LLM: per-hero combat stats (kills, assists, damage, d20 avg, nat 20s/1s)
        ▼
- [12] locations ──────────── LLM: locations visited with descriptions, connections, relative positions
+ [13] locations ──────────── LLM: locations visited with descriptions, connections, relative positions
        ▼
- [13] npcs ───────────────── LLM: session-level NPC list (name, race, role, attitude, actions, status)
+ [14] npcs ───────────────── LLM: session-level NPC list (name, race, role, attitude, actions, status)
        ▼
- [14] loot ───────────────── LLM: items looted + gold transactions (who, what, when, where, how)
+ [15] loot ───────────────── LLM: items looted + gold transactions (who, what, when, where, how)
        ▼
- [15] missions ──────────── LLM: quests started/continued/completed with objectives and rewards
+ [16] missions ──────────── LLM: quests started/continued/completed with objectives and rewards
        ▼
- [16] scenes ────────────── LLM: cinematic scene prompts (JSON array)
+ [17] scenes ────────────── LLM: cinematic scene prompts (JSON array)
        │
        ▼
- [17] illustration ──────── LLM: generates image prompt → Gemini Imagen generates PNG
+ [18] illustration ──────── LLM: generates image prompt → Gemini Imagen generates PNG
                              Skipped automatically if no Gemini API key is configured.
 
 ```

@@ -280,8 +280,11 @@ def smart_merge_glossary(campaign_id, new_terms):
             lower_to_key = {k.lower(): k for k in existing}
             added = 0
             updated = 0
-            for term, info in new_terms.items():
-                # Ensure description field exists
+            for term, info in list(new_terms.items()):
+                # Normalise: LLM sometimes returns strings instead of dicts
+                if not isinstance(info, dict):
+                    info = {"category": "Other", "definition": str(info), "description": ""}
+                    new_terms[term] = info
                 if "description" not in info:
                     info["description"] = ""
                 canonical = lower_to_key.get(term.lower())

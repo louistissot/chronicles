@@ -173,7 +173,7 @@ export interface GlossaryEntry {
   description: string
 }
 
-export type PipelineStage = 'transcription' | 'saving_transcript' | 'transcript_correction' | 'speaker_mapping' | 'updating_transcript' | 'timeline' | 'summary' | 'dm_notes' | 'character_updates' | 'glossary' | 'leaderboard' | 'locations' | 'npcs' | 'loot' | 'missions' | 'scenes' | 'illustration'
+export type PipelineStage = 'transcription' | 'saving_transcript' | 'transcript_correction' | 'speaker_mapping' | 'updating_transcript' | 'transcript_review' | 'timeline' | 'summary' | 'dm_notes' | 'character_updates' | 'glossary' | 'leaderboard' | 'locations' | 'npcs' | 'loot' | 'missions' | 'scenes' | 'illustration'
 export type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'needs_review'
 
 export interface SpeakerReviewPayload {
@@ -205,6 +205,11 @@ export interface EntityReviewPayload {
   session_id: string
   cards: EntityReviewCard[]
   auto_applied: Array<{ name: string; action: string; confidence: number }>
+}
+
+export interface TranscriptReviewPayload {
+  transcript: string
+  txtPath: string
 }
 
 declare global {
@@ -285,6 +290,8 @@ interface PyWebViewAPI {
     stage: string,
     decisions: Array<{ id: string; action: 'accept' | 'edit' | 'decline'; name?: string; proposed?: Record<string, any>; edited?: Record<string, any> }>
   ): Promise<{ ok: boolean }>
+
+  complete_transcript_review(corrected_text: string | null): Promise<{ ok: boolean }>
 
   // Campaign management
   get_campaigns(): Promise<Campaign[]>

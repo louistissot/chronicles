@@ -5,14 +5,14 @@
  */
 import { useState, useEffect, useRef } from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { api, type PipelineStage, type SpeakerReviewPayload, type EntityReviewPayload } from '@/lib/api'
+import { api, type PipelineStage, type SpeakerReviewPayload, type EntityReviewPayload, type TranscriptReviewPayload } from '@/lib/api'
 import { EntityReviewPanel } from './EntityReviewPanel'
 import {
   Loader2, RefreshCw, Mic, FileText,
   BookMarked, ScrollText, Film, Clock, Check, X,
   ChevronDown, Square, AlertTriangle, CheckCircle2, XCircle, Circle, Wand2,
   Copy, BookOpen, Users, Mic2, SkipForward, Pause, Play, Image, SpellCheck,
-  Trophy, Compass, Gem, Scroll,
+  Trophy, Compass, Gem, Scroll, Pencil,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { PipelineStages, StageState } from '@/App'
@@ -39,6 +39,7 @@ export const STAGE_ORDER: { id: PipelineStage; label: string; icon: React.Compon
   { id: 'transcript_correction',label: 'Term Correction',       icon: SpellCheck },
   { id: 'speaker_mapping',      label: 'Speaker ID',            icon: Users },
   { id: 'updating_transcript',  label: 'Update Transcript',     icon: RefreshCw },
+  { id: 'transcript_review',  label: 'Review Transcript',     icon: Pencil },
   { id: 'timeline',           label: 'Timeline',           icon: Clock },
   { id: 'summary',            label: 'Summary',            icon: BookMarked },
   { id: 'dm_notes',           label: 'DM Notes',           icon: ScrollText },
@@ -79,6 +80,7 @@ interface InlinePipelineViewProps {
   stages: PipelineStages
   speakerReview: SpeakerReviewPayload | null
   entityReview: EntityReviewPayload | null
+  transcriptReview: TranscriptReviewPayload | null
   logLines: Array<{ text: string; isStderr: boolean }>
   logVersion: number
   streamingChunks: Record<PipelineStage, string>
@@ -101,7 +103,7 @@ interface InlinePipelineViewProps {
 }
 
 export function InlinePipelineView({
-  stages, speakerReview, entityReview, logLines, logVersion, streamingChunks, streamingVersion,
+  stages, speakerReview, entityReview, transcriptReview, logLines, logVersion, streamingChunks, streamingVersion,
   isTranscribing, onStop, onStopLLMStage, onSkipStage, onBack, onViewSession,
   recordingActive, recordingPaused, recordingSeconds,
   recordingAmplitude, recordingFileSize, amplitudeHistory,
@@ -359,6 +361,14 @@ export function InlinePipelineView({
                 </div>
               )}
 
+              {/* Transcript review */}
+              {activeStage === 'transcript_review' && activeState.status === 'needs_review' && transcriptReview && (
+                <TranscriptReviewPanel
+                  payload={transcriptReview}
+                  onApprove={(correctedText) => api('complete_transcript_review', correctedText)}
+                />
+              )}
+
               {/* Entity review */}
               {entityReview && activeState.status === 'needs_review' && entityReview.stage === activeStage && (
                 <EntityReviewPanel
@@ -449,6 +459,80 @@ export function InlinePipelineView({
             </div>
           </ScrollArea>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Transcript Review Panel ───────────────────────────────────────────────
+
+function TranscriptReviewPanel({
+  payload,
+  onApprove,
+}: {
+  payload: TranscriptReviewPayload
+  onApprove: (correctedText: string | null) => void
+}) {
+  const [text, setText] = useState(payload.transcript)
+  const [submitting, setSubmitting] = useState(false)
+  const hasEdits = text !== payload.transcript
+
+  async function handleApprove() {
+    setSubmitting(true)
+    await onApprove(hasEdits ? text : null)
+    setSubmitting(false)
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Pencil className="w-4 h-4 text-gold/60" />
+        <div>
+          <h3 className="text-sm font-heading text-parchment/80 uppercase tracking-widest">
+            Review Transcript
+          </h3>
+          <p className="text-[10px] font-body text-parchment/40 mt-0.5">
+            Review and correct speaker attributions or misheard words before AI analysis.
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-md border border-white/10 overflow-hidden">
+        <textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          className="w-full bg-void/60 text-[11px] text-parchment/70 font-mono leading-relaxed p-3 outline-none resize-y min-h-[40vh] max-h-[60vh]"
+          spellCheck={false}
+        />
+      </div>
+
+      <div className="flex items-center justify-between">
+        {hasEdits && (
+          <span className="text-[10px] font-body text-amber-400/60 italic">
+            Transcript has been modified
+          </span>
+        )}
+        {!hasEdits && (
+          <span className="text-[10px] font-body text-parchment/30 italic">
+            No changes made
+          </span>
+        )}
+        <button
+          onClick={handleApprove}
+          disabled={submitting}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-heading uppercase tracking-widest transition-all',
+            submitting
+              ? 'bg-white/5 text-parchment/30 border border-white/10 cursor-not-allowed'
+              : 'bg-emerald-400/15 text-emerald-400 border border-emerald-400/25 hover:bg-emerald-400/25',
+          )}
+        >
+          {submitting
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : <Check className="w-3.5 h-3.5" />
+          }
+          {hasEdits ? 'Apply & Continue' : 'Approve & Continue'}
+        </button>
       </div>
     </div>
   )
