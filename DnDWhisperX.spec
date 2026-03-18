@@ -33,6 +33,10 @@ a = Analysis(
         "llm",
         "sessions",
         "campaigns",
+        "characters",
+        "entities",
+        "maps",
+        "image_gen",
         "deps",
         "backend",
         # pywebview

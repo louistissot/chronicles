@@ -216,14 +216,22 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
     setMapData(null)
     setSelectedLocation(null)
     async function load() {
-      const mapResult = await api('get_campaign_map', campaignId!) as { ok: boolean; map: CampaignMap | null } | null
-      const locResult = await api('get_campaign_locations', campaignId!) as { ok: boolean; locations?: CampaignLocation[] } | null
-      if (mapResult?.ok && mapResult.map) {
-        setMapData(mapResult.map)
-        setActivePlane(mapResult.map.planes?.[0] || 'Material Plane')
+      try {
+        const mapResult = await api('get_campaign_map', campaignId!) as { ok: boolean; map: CampaignMap | null } | null
+        if (mapResult?.ok && mapResult.map) {
+          setMapData(mapResult.map)
+          setActivePlane(mapResult.map.planes?.[0] || 'Material Plane')
+        }
+      } catch {
+        // Map not generated yet — that's fine
       }
-      if (locResult?.ok && locResult.locations) {
-        setLocations(locResult.locations)
+      try {
+        const locResult = await api('get_campaign_locations', campaignId!) as { ok: boolean; locations?: CampaignLocation[] } | null
+        if (locResult?.ok && locResult.locations) {
+          setLocations(locResult.locations)
+        }
+      } catch {
+        // Locations may not exist yet
       }
       setLoaded(true)
     }
@@ -359,6 +367,23 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
             {campaignName} · {locations.length} location{locations.length !== 1 ? 's' : ''}
           </p>
         </div>
+        {viewMode === 'map' && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleGenerate}
+            disabled={generating || locations.length === 0}
+            className="h-7 text-[10px] px-3 gap-1.5"
+          >
+            {generating ? (
+              <><Loader2 className="w-3 h-3 animate-spin" />Generating...</>
+            ) : mapData ? (
+              <><RefreshCw className="w-3 h-3" />Regenerate Map</>
+            ) : (
+              <><Compass className="w-3 h-3" />Generate Map</>
+            )}
+          </Button>
+        )}
         {/* View toggle */}
         <div className="flex rounded-md border border-white/8 overflow-hidden">
           <button
@@ -382,23 +407,6 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
             <List className="w-3.5 h-3.5" />
           </button>
         </div>
-        {viewMode === 'map' && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleGenerate}
-            disabled={generating || locations.length === 0}
-            className="h-7 text-[10px] px-3 gap-1.5"
-          >
-            {generating ? (
-              <><Loader2 className="w-3 h-3 animate-spin" />Generating...</>
-            ) : mapData ? (
-              <><RefreshCw className="w-3 h-3" />Regenerate Map</>
-            ) : (
-              <><Compass className="w-3 h-3" />Generate Map</>
-            )}
-          </Button>
-        )}
       </div>
 
       {/* Plane tabs (map view only) */}
@@ -516,8 +524,8 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
                 {filteredListLocations.map((loc, i) => (
                     <div key={i} className="rounded-md border border-white/5 bg-void/30 px-3 py-2 hover:border-white/10 transition-colors">
                       <div className="flex items-center gap-2">
-                        {loc.visit_order != null ? (
-                          <span className="w-5 h-5 rounded-full bg-gold/15 border border-gold/25 flex items-center justify-center text-[10px] font-heading text-gold/80 flex-none">{loc.visit_order}</span>
+                        {loc.global_order != null ? (
+                          <span className="w-5 h-5 rounded-full bg-gold/15 border border-gold/25 flex items-center justify-center text-[10px] font-heading text-gold/80 flex-none">{loc.global_order}</span>
                         ) : (
                           <Compass className="w-3.5 h-3.5 text-gold/50 flex-none" />
                         )}

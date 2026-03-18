@@ -3994,8 +3994,11 @@ Rules:
                         }
                         seen_order.append(key)
 
-            # Return in insertion order (chronological by first appearance, then visit_order)
+            # Return in insertion order (chronological by first appearance)
             locations = [seen[k] for k in seen_order]
+            # Assign global chronological visit numbers (1-based, across all sessions)
+            for idx, loc in enumerate(locations, 1):
+                loc["global_order"] = idx
             return {"ok": True, "locations": locations, "session_count": len(campaign_sessions)}
         except Exception as e:
             _log.error("get_campaign_locations failed: %s", e)

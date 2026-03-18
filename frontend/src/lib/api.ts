@@ -115,6 +115,7 @@ export interface CampaignLocation {
   session_count: number
   region_type?: string
   location_type?: string
+  global_order?: number
 }
 
 export interface MapNode {
