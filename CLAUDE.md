@@ -42,6 +42,7 @@ maps.py          Campaign map persistence (~/.config/dnd-whisperx/maps/<campaign
                  Stores LLM-generated node positions, edges, planes. Atomic writes + backup.
 beyond.py        D&D Beyond data fetching. Parses classes/races/stats/spells/equipment. ValueError on 403 (private).
 sessions.py      Session registry (~/.config/dnd-whisperx/sessions.json). Atomic writes + backup + empty-write guard.
+                 Use get_session_by_id(id) for single lookups (avoids loading all sessions).
 campaigns.py     Campaign + season registry. Seasons store character UUIDs referencing characters.json.
 config.py        Token + prefs storage (prefs.json). Thread-safe with lock + atomic writes.
 runner.py        Runs ffmpeg + whisperx CLI as subprocesses with streaming output.
