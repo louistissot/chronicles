@@ -1546,6 +1546,8 @@ end try
             except Exception:
                 pass
         self._glossary_context = self._build_glossary_context()
+        self._entity_context = ""  # Clear to prevent cross-session bleed during single-stage reprocessing
+        self._session_date = session.get("date", "")
         self._stop_llm_stages.discard(stage)
 
         def _run():
@@ -1592,6 +1594,8 @@ end try
                 self._current_campaign_id = prev_campaign_id
                 self._current_character_ids = prev_character_ids
                 self._glossary_context = ""
+                self._entity_context = ""
+                self._session_date = ""
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
