@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   MapPin, Loader2, RefreshCw, X, Compass, Map, List, Search,
 } from 'lucide-react'
@@ -6,9 +6,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import type { CampaignMap, CampaignLocation, LocationSessionEvent } from '@/lib/api'
-
-// Lazy-load React Flow canvas to prevent pywebview crashes if React Flow fails to initialize
-const MapCanvas = lazy(() => import('@/components/MapCanvas'))
+import MapCanvas from '@/components/MapCanvas'
 
 // ── Detail Panel ────────────────────────────────────────────────────────────
 
@@ -299,19 +297,13 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
           )}
 
           {mapData && campaignId && (
-            <Suspense fallback={
-              <div className="h-full flex items-center justify-center">
-                <Loader2 className="w-6 h-6 animate-spin text-gold/30" />
-              </div>
-            }>
-              <MapCanvas
-                mapData={mapData}
-                locations={locations}
-                activePlane={activePlane}
-                campaignId={campaignId}
-                onNodeClick={handleNodeClick}
-              />
-            </Suspense>
+            <MapCanvas
+              mapData={mapData}
+              locations={locations}
+              activePlane={activePlane}
+              campaignId={campaignId}
+              onNodeClick={handleNodeClick}
+            />
           )}
 
           {/* Detail panel */}
