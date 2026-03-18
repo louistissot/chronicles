@@ -90,6 +90,63 @@ export interface Character {
   is_npc?: boolean
   npc_description?: string
   campaign_ids?: string[]
+  npc_race?: string
+  npc_role?: string
+  npc_attitude?: string
+  npc_current_status?: string
+  npc_session_history?: Array<{
+    session_id: string
+    session_date: string
+    actions: string
+    status: string
+    attitude: string
+  }>
+}
+
+export interface CampaignLocation {
+  name: string
+  description: string
+  connections: string[]
+  relative_position: string
+  visit_order: number | null
+  visited: boolean
+  first_session_date: string
+  last_session_date: string
+  session_count: number
+  region_type?: string
+  location_type?: string
+}
+
+export interface MapNode {
+  name: string
+  x: number
+  y: number
+  plane: string
+  region_type: string
+  location_type: string
+}
+
+export interface MapEdge {
+  from: string
+  to: string
+  label: string
+  travel_type: 'walk' | 'ride' | 'sail' | 'fly' | 'teleport' | 'portal' | 'underground' | 'swim' | 'climb' | 'other'
+}
+
+export interface CampaignMap {
+  generated_at: string
+  nodes: MapNode[]
+  edges: MapEdge[]
+  planes: string[]
+}
+
+export interface LocationSessionEvent {
+  session_id: string
+  session_date: string
+  session_name: string
+  description: string
+  npcs: string[]
+  events: string[]
 }
 
 export interface Season {
@@ -332,6 +389,16 @@ interface PyWebViewAPI {
   // Glossary
   get_campaign_glossary(campaignId: string): Promise<Record<string, GlossaryEntry>>
   update_campaign_glossary(campaignId: string, glossary: Record<string, GlossaryEntry>): Promise<{ ok: boolean; error?: string }>
+  rebuild_campaign_glossary(campaignId: string): Promise<{ ok: boolean; terms?: number; npcs_created?: number; error?: string }>
+
+  // Campaign locations
+  get_campaign_locations(campaignId: string): Promise<{ ok: boolean; locations?: CampaignLocation[]; session_count?: number; error?: string }>
+
+  // Campaign map
+  get_campaign_map(campaignId: string): Promise<{ ok: boolean; map: CampaignMap | null }>
+  generate_campaign_map(campaignId: string): Promise<{ ok: boolean; map?: CampaignMap; error?: string }>
+  update_map_positions(campaignId: string, positions: Record<string, { x: number; y: number }>): Promise<{ ok: boolean }>
+  get_location_events(campaignId: string, locationName: string): Promise<{ ok: boolean; location_name?: string; sessions?: LocationSessionEvent[]; error?: string }>
 
   // Character management
   get_characters(): Promise<Character[]>

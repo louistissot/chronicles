@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
 import {
-  BookOpen, Plus, Save, Search, X,
+  BookOpen, Plus, Save, Search, X, RefreshCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import type { GlossaryEntry } from '@/lib/api'
 
-const GLOSSARY_CATEGORIES = ['NPC', 'Location', 'Faction', 'Item', 'Spell', 'Other']
+const GLOSSARY_CATEGORIES = ['Faction', 'Item', 'Spell', 'Other']
 
 type SortOrder = 'name-asc' | 'name-desc' | 'category'
 
@@ -21,6 +21,7 @@ export function GlossaryTab({ campaignId, campaignName }: { campaignId: string |
   const [search, setSearch] = useState('')
   const [expandedDesc, setExpandedDesc] = useState<Record<string, boolean>>({})
   const [sortOrder, setSortOrder] = useState<SortOrder>('name-asc')
+  const [rebuilding, setRebuilding] = useState(false)
 
   useEffect(() => {
     if (!campaignId) return
@@ -40,6 +41,18 @@ export function GlossaryTab({ campaignId, campaignName }: { campaignId: string |
     await api('update_campaign_glossary', campaignId, glossary)
     setSaving(false)
     setDirty(false)
+  }
+
+  async function handleRebuild() {
+    if (!campaignId) return
+    setRebuilding(true)
+    const result = await api('rebuild_campaign_glossary', campaignId) as { ok: boolean; terms?: number; npcs_created?: number; error?: string } | null
+    if (result?.ok) {
+      const data = await api('get_campaign_glossary', campaignId)
+      setGlossary(data ?? {})
+      setDirty(false)
+    }
+    setRebuilding(false)
   }
 
   function updateEntry(term: string, field: 'category' | 'definition' | 'description', value: string) {
@@ -123,6 +136,9 @@ export function GlossaryTab({ campaignId, campaignName }: { campaignId: string |
             {campaignName} · {termCount} term{termCount !== 1 ? 's' : ''}
           </p>
         </div>
+        <Button size="sm" variant="outline" onClick={handleRebuild} disabled={rebuilding} className="h-7 text-[10px] px-3 gap-1.5">
+          <RefreshCw className={cn('w-3 h-3', rebuilding && 'animate-spin')} />{rebuilding ? 'Rebuilding…' : 'Rebuild from Sessions'}
+        </Button>
         {dirty && (
           <Button size="sm" onClick={handleSave} disabled={saving} className="h-7 text-[10px] px-3 gap-1.5">
             <Save className="w-3 h-3" />{saving ? 'Saving…' : 'Save Changes'}

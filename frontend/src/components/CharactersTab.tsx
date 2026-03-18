@@ -43,9 +43,34 @@ function CharacterCard({
       <div className="flex-1 min-w-0 space-y-0.5">
         <p className="text-sm font-heading text-parchment/85 truncate">{character.name || 'Unnamed'}</p>
         {isNpc ? (
-          <p className="text-[11px] font-body text-parchment/40 truncate line-clamp-2">
-            {character.npc_description || 'No description yet — process more sessions'}
-          </p>
+          <>
+            {(character.npc_race || character.npc_role) && (
+              <div className="flex flex-wrap gap-1 mb-0.5">
+                {character.npc_race && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/5 text-parchment/40 border border-white/5">{character.npc_race}</span>
+                )}
+                {character.npc_role && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/5 text-parchment/40 border border-white/5">{character.npc_role}</span>
+                )}
+                {character.npc_attitude && (
+                  <span className={cn(
+                    'text-[9px] px-1.5 py-0.5 rounded-full border capitalize',
+                    character.npc_attitude === 'friendly' ? 'text-emerald-400/70 bg-emerald-400/10 border-emerald-400/20' :
+                    character.npc_attitude === 'hostile' ? 'text-red-400/70 bg-red-400/10 border-red-400/20' :
+                    'text-parchment/40 bg-white/5 border-white/5'
+                  )}>{character.npc_attitude}</span>
+                )}
+              </div>
+            )}
+            <p className="text-[11px] font-body text-parchment/40 truncate line-clamp-2">
+              {character.npc_description || 'No description yet — process more sessions'}
+            </p>
+            {character.npc_current_status && (
+              <p className="text-[10px] font-body text-parchment/25 truncate mt-0.5 italic">
+                {character.npc_current_status}
+              </p>
+            )}
+          </>
         ) : (
           <p className="text-[11px] font-body text-parchment/50 truncate">
             {[character.race, character.class_name].filter(Boolean).join(' · ') || 'No details'}
@@ -588,13 +613,78 @@ function CharacterDetail({
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
         {activeTab === 'info' && (
           <>
-            {/* NPC Description (for NPCs only) */}
+            {/* NPC Details (for NPCs only) */}
             {character.is_npc && (
-              <div className="space-y-1.5">
-                <p className="text-[10px] font-heading text-parchment/40 uppercase tracking-widest">Description</p>
-                <p className="text-xs font-body text-parchment/60 leading-relaxed bg-white/3 rounded-md p-3 border border-white/5">
-                  {character.npc_description || 'No description yet — process more sessions to enrich this NPC.'}
-                </p>
+              <div className="space-y-3">
+                {/* Quick info badges */}
+                {(character.npc_race || character.npc_role || character.npc_attitude) && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {character.npc_race && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-parchment/50 border border-white/8">{character.npc_race}</span>
+                    )}
+                    {character.npc_role && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-parchment/50 border border-white/8">{character.npc_role}</span>
+                    )}
+                    {character.npc_attitude && (
+                      <span className={cn(
+                        'text-[10px] px-2 py-0.5 rounded-full border capitalize',
+                        character.npc_attitude === 'friendly' ? 'text-emerald-400/70 bg-emerald-400/10 border-emerald-400/20' :
+                        character.npc_attitude === 'hostile' ? 'text-red-400/70 bg-red-400/10 border-red-400/20' :
+                        'text-parchment/40 bg-white/5 border-white/5'
+                      )}>{character.npc_attitude}</span>
+                    )}
+                  </div>
+                )}
+
+                {/* Description */}
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-heading text-parchment/40 uppercase tracking-widest">Description</p>
+                  <p className="text-xs font-body text-parchment/60 leading-relaxed bg-white/3 rounded-md p-3 border border-white/5">
+                    {character.npc_description || 'No description yet — process more sessions to enrich this NPC.'}
+                  </p>
+                </div>
+
+                {/* Current Status */}
+                {character.npc_current_status && (
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] font-heading text-parchment/40 uppercase tracking-widest">Current Status</p>
+                    <p className="text-xs font-body text-parchment/50 leading-relaxed bg-white/3 rounded-md p-3 border border-white/5 italic">
+                      {character.npc_current_status}
+                    </p>
+                  </div>
+                )}
+
+                {/* Session History */}
+                {character.npc_session_history && character.npc_session_history.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] font-heading text-parchment/40 uppercase tracking-widest">
+                      Session History ({character.npc_session_history.length})
+                    </p>
+                    <div className="space-y-1.5">
+                      {character.npc_session_history.map((entry, i) => (
+                        <div key={i} className="rounded-md border border-white/5 bg-void/30 px-3 py-2">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-[10px] font-heading text-gold/60">{entry.session_date || 'Unknown date'}</span>
+                            {entry.attitude && (
+                              <span className={cn(
+                                'text-[8px] px-1.5 py-0.5 rounded-full border capitalize',
+                                entry.attitude === 'friendly' ? 'text-emerald-400/60 bg-emerald-400/8 border-emerald-400/15' :
+                                entry.attitude === 'hostile' ? 'text-red-400/60 bg-red-400/8 border-red-400/15' :
+                                'text-parchment/30 bg-white/3 border-white/5'
+                              )}>{entry.attitude}</span>
+                            )}
+                          </div>
+                          {entry.actions && (
+                            <p className="text-[11px] font-body text-parchment/50 leading-relaxed">{entry.actions}</p>
+                          )}
+                          {entry.status && (
+                            <p className="text-[10px] font-body text-parchment/30 italic mt-1">{entry.status}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

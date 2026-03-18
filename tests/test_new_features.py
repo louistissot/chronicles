@@ -18,6 +18,10 @@ import pytest
 # ---------------------------------------------------------------------------
 with patch.dict(sys.modules, {"webview": MagicMock(), "sounddevice": MagicMock()}):
     import backend
+    _characters_mod = sys.modules["characters"]
+    _campaigns_mod = sys.modules["campaigns"]
+    _sessions_mod = sys.modules["sessions"]
+    import maps as _maps_mod
 
 
 def _make_api() -> backend.API:
@@ -302,12 +306,18 @@ class TestBuildGlossaryContext:
         _, api = _make_api()
         api._current_campaign_id = "test-camp"
         glossary = {
-            "Strahd": {"category": "NPC", "definition": "Vampire lord"},
-            "Vallaki": {"category": "Location", "definition": "Walled town"},
+            "Order of the Gauntlet": {"category": "Faction", "definition": "Holy order of knights"},
+            "Silver Sword": {"category": "Item", "definition": "Legendary weapon"},
         }
-        with patch.object(backend, "_get_glossary", return_value=glossary):
+        npcs = [{"name": "Strahd", "npc_description": "Vampire lord"}]
+        loc_entities = [{"name": "Vallaki", "current": {"definition": "Walled town"}}]
+        with patch.object(backend, "_get_glossary", return_value=glossary), \
+             patch.object(backend, "_get_npcs", return_value=npcs), \
+             patch.object(backend, "_get_entities", return_value=loc_entities):
             result = api._build_glossary_context()
         assert "## Campaign Glossary" in result
+        assert "Order of the Gauntlet (Faction): Holy order of knights" in result
+        assert "Silver Sword (Item): Legendary weapon" in result
         assert "Strahd (NPC): Vampire lord" in result
         assert "Vallaki (Location): Walled town" in result
 
@@ -340,3 +350,322 @@ class TestBuildGlossaryContext:
         assert "Mysterious (Other)" in result
         # No trailing colon when definition is empty
         assert "Mysterious (Other):" not in result
+
+
+# ===========================================================================
+# TestMapsStorage — maps.py module
+# ===========================================================================
+
+class TestMapsStorage:
+    """Test the maps.py campaign map persistence module."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_maps(self, tmp_path, monkeypatch):
+        maps_dir = tmp_path / "maps"
+        maps_dir.mkdir()
+        monkeypatch.setattr(_maps_mod, "_MAPS_DIR", maps_dir)
+
+    def test_load_nonexistent_returns_none(self):
+        result = _maps_mod.load_map("nonexistent-campaign")
+        assert result is None
+
+    def test_save_and_load(self):
+        data = {
+            "nodes": [
+                {"name": "Tavern", "x": 10, "y": 20},
+                {"name": "Castle", "x": 50, "y": 60},
+            ],
+            "edges": [
+                {"source": "Tavern", "target": "Castle"},
+            ],
+        }
+        _maps_mod.save_map("camp-1", data)
+        loaded = _maps_mod.load_map("camp-1")
+        assert loaded is not None
+        assert len(loaded["nodes"]) == 2
+        assert loaded["nodes"][0]["name"] == "Tavern"
+        assert loaded["edges"][0]["source"] == "Tavern"
+
+    def test_update_node_positions(self):
+        data = {
+            "nodes": [
+                {"name": "Tavern", "x": 10, "y": 20},
+                {"name": "Castle", "x": 50, "y": 60},
+            ],
+            "edges": [],
+        }
+        _maps_mod.save_map("camp-1", data)
+        result = _maps_mod.update_node_positions("camp-1", {
+            "Tavern": {"x": 100, "y": 200},
+        })
+        assert result is True
+        loaded = _maps_mod.load_map("camp-1")
+        tavern = [n for n in loaded["nodes"] if n["name"] == "Tavern"][0]
+        castle = [n for n in loaded["nodes"] if n["name"] == "Castle"][0]
+        assert tavern["x"] == 100
+        assert tavern["y"] == 200
+        # Castle unchanged
+        assert castle["x"] == 50
+        assert castle["y"] == 60
+
+    def test_update_positions_no_map_returns_false(self):
+        result = _maps_mod.update_node_positions("no-such-campaign", {
+            "Tavern": {"x": 1, "y": 2},
+        })
+        assert result is False
+
+
+# ===========================================================================
+# TestNpcEnrichment — characters.py enrich_npc()
+# ===========================================================================
+
+class TestNpcEnrichment:
+    """Test characters.py enrich_npc() progressive enrichment logic."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_chars(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_characters_mod, "_CHARACTERS_FILE", tmp_path / "characters.json")
+        monkeypatch.setattr(_characters_mod, "_CHARACTERS_DIR", tmp_path / "characters")
+
+    def _create_test_npc(self):
+        return _characters_mod.create_npc(
+            name="Strahd",
+            description="Vampire",
+            campaign_id="camp-1",
+            attitude="hostile",
+            current_status="alive",
+        )
+
+    def test_enrich_npc_updates_description_if_longer(self):
+        npc = self._create_test_npc()
+        result = _characters_mod.enrich_npc(
+            npc["id"],
+            description="Vampire lord of Barovia, ancient and powerful, cursed by dark pact",
+        )
+        assert result is not None
+        assert "ancient and powerful" in result["npc_description"]
+
+    def test_enrich_npc_keeps_longer_existing_description(self):
+        npc = self._create_test_npc()
+        # First enrich with a long description
+        _characters_mod.enrich_npc(npc["id"], description="Very long description that is definitely longer than the original one and should be kept")
+        # Then try to overwrite with shorter
+        result = _characters_mod.enrich_npc(npc["id"], description="Short")
+        assert result is not None
+        assert "Very long description" in result["npc_description"]
+
+    def test_enrich_npc_updates_attitude_and_status(self):
+        npc = self._create_test_npc()
+        result = _characters_mod.enrich_npc(
+            npc["id"],
+            attitude="friendly",
+            current_status="wounded",
+        )
+        assert result is not None
+        assert result["npc_attitude"] == "friendly"
+        assert result["npc_current_status"] == "wounded"
+
+    def test_enrich_npc_appends_session_history(self):
+        npc = self._create_test_npc()
+        # First session
+        _characters_mod.enrich_npc(
+            npc["id"],
+            session_id="s1",
+            session_date="2026-03-01",
+            actions="Attacked the party",
+            attitude="hostile",
+        )
+        # Second session
+        result = _characters_mod.enrich_npc(
+            npc["id"],
+            session_id="s2",
+            session_date="2026-03-08",
+            actions="Negotiated a truce",
+            attitude="neutral",
+        )
+        assert result is not None
+        history = result.get("npc_session_history", [])
+        assert len(history) == 2
+        assert history[0]["session_id"] == "s1"
+        assert history[1]["session_id"] == "s2"
+
+        # Duplicate session_id should not re-append
+        result2 = _characters_mod.enrich_npc(npc["id"], session_id="s2", actions="Extra info")
+        history2 = result2.get("npc_session_history", [])
+        assert len(history2) == 2
+
+    def test_enrich_npc_adds_campaign_id(self):
+        npc = self._create_test_npc()
+        assert "camp-1" in npc.get("campaign_ids", [])
+        result = _characters_mod.enrich_npc(npc["id"], campaign_id="camp-2")
+        assert result is not None
+        assert "camp-1" in result["campaign_ids"]
+        assert "camp-2" in result["campaign_ids"]
+
+
+# ===========================================================================
+# TestGlossaryRouting — _save_glossary routes NPC/Location entries away
+# ===========================================================================
+
+class TestGlossaryRouting:
+    """Test that _save_glossary routes NPC and Location entries to dedicated registries."""
+
+    def test_npc_entries_routed_to_character_registry(self, tmp_path):
+        _, api = _make_api()
+        api._current_campaign_id = "camp-1"
+        api._current_session_id = "sess-1"
+
+        glossary = {
+            "Strahd": {"category": "NPC", "definition": "Vampire lord", "description": "", "confidence": 98, "reasoning": "Named"},
+            "Silver Sword": {"category": "Item", "definition": "Legendary weapon", "description": "", "confidence": 98, "reasoning": "Named"},
+        }
+
+        with patch.object(api, "_extract_json_object", return_value=dict(glossary)), \
+             patch.object(api, "_sync_npcs_from_glossary") as mock_npc_sync, \
+             patch.object(backend, "_get_glossary", return_value={}), \
+             patch.object(backend, "_smart_merge_glossary", return_value=(1, 0)), \
+             patch.object(backend, "_migrate_glossary", return_value=0), \
+             patch.object(api, "_build_glossary_context", return_value=""), \
+             patch.object(backend, "update_session"):
+            api._save_glossary(json.dumps(glossary), tmp_path)
+
+        # _sync_npcs_from_glossary should be called (at least for the NPC entries routing)
+        assert mock_npc_sync.call_count >= 1
+        # The first call should contain the NPC entry specifically
+        first_call_glossary = mock_npc_sync.call_args_list[0][0][0]
+        assert "Strahd" in first_call_glossary
+
+    def test_location_entries_routed_away(self, tmp_path):
+        _, api = _make_api()
+        api._current_campaign_id = "camp-1"
+        api._current_session_id = "sess-1"
+
+        glossary = {
+            "Vallaki": {"category": "Location", "definition": "Walled town", "description": "", "confidence": 98, "reasoning": "Named"},
+            "Healing Potion": {"category": "Item", "definition": "Restores HP", "description": "", "confidence": 98, "reasoning": "Named"},
+        }
+
+        merged_terms = {}
+
+        def capture_merge(cid, terms):
+            merged_terms.update(terms)
+            return (len(terms), 0)
+
+        with patch.object(api, "_extract_json_object", return_value=dict(glossary)), \
+             patch.object(api, "_sync_npcs_from_glossary"), \
+             patch.object(backend, "_get_glossary", return_value={}), \
+             patch.object(backend, "_smart_merge_glossary", side_effect=capture_merge) as mock_merge, \
+             patch.object(backend, "_migrate_glossary", return_value=0), \
+             patch.object(api, "_build_glossary_context", return_value=""), \
+             patch.object(backend, "update_session"):
+            api._save_glossary(json.dumps(glossary), tmp_path)
+
+        # Location entry should be stripped from glossary before smart_merge
+        assert "Vallaki" not in merged_terms
+        # Item entry should still be in the merged terms
+        assert "Healing Potion" in merged_terms
+
+
+# ===========================================================================
+# TestGetCampaignLocationsEnrichment — region_type/location_type passthrough
+# ===========================================================================
+
+class TestGetCampaignLocationsEnrichment:
+    """Test get_campaign_locations preserves region_type and location_type."""
+
+    def test_region_and_location_type_passed_through(self, tmp_path):
+        _, api = _make_api()
+        # Create a locations JSON file
+        locs = [
+            {"name": "Vallaki", "description": "Walled town", "region_type": "settlement",
+             "location_type": "town", "connections": [], "visited": True},
+        ]
+        loc_file = tmp_path / "locations.json"
+        loc_file.write_text(json.dumps(locs), encoding="utf-8")
+
+        sessions = [
+            {"id": "s1", "campaign_id": "camp-1", "date": "2026-03-01",
+             "locations_path": str(loc_file)},
+        ]
+
+        with patch.object(backend, "get_sessions", return_value=sessions):
+            result = api.get_campaign_locations("camp-1")
+
+        assert result["ok"] is True
+        assert len(result["locations"]) == 1
+        loc = result["locations"][0]
+        assert loc["region_type"] == "settlement"
+        assert loc["location_type"] == "town"
+
+    def test_merge_keeps_latest_type(self, tmp_path):
+        _, api = _make_api()
+        # Two sessions with the same location, second has richer type info
+        locs1 = [
+            {"name": "Tavern", "description": "A place", "region_type": "", "location_type": "",
+             "connections": [], "visited": True},
+        ]
+        locs2 = [
+            {"name": "Tavern", "description": "A warm cozy place with ale",
+             "region_type": "urban", "location_type": "building",
+             "connections": ["Market"], "visited": True},
+        ]
+        f1 = tmp_path / "loc1.json"
+        f2 = tmp_path / "loc2.json"
+        f1.write_text(json.dumps(locs1), encoding="utf-8")
+        f2.write_text(json.dumps(locs2), encoding="utf-8")
+
+        sessions = [
+            {"id": "s1", "campaign_id": "camp-1", "date": "2026-03-01",
+             "locations_path": str(f1)},
+            {"id": "s2", "campaign_id": "camp-1", "date": "2026-03-08",
+             "locations_path": str(f2)},
+        ]
+
+        with patch.object(backend, "get_sessions", return_value=sessions):
+            result = api.get_campaign_locations("camp-1")
+
+        assert result["ok"] is True
+        loc = result["locations"][0]
+        # Latest non-empty type wins
+        assert loc["region_type"] == "urban"
+        assert loc["location_type"] == "building"
+        # Description: longest wins
+        assert "warm cozy" in loc["description"]
+
+
+# ===========================================================================
+# TestCreateNpcEnriched — create_npc with new optional fields
+# ===========================================================================
+
+class TestCreateNpcEnriched:
+    """Test characters.py create_npc with enriched NPC fields."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_chars(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_characters_mod, "_CHARACTERS_FILE", tmp_path / "characters.json")
+        monkeypatch.setattr(_characters_mod, "_CHARACTERS_DIR", tmp_path / "characters")
+
+    def test_create_npc_with_enriched_fields(self):
+        npc = _characters_mod.create_npc(
+            name="Ireena",
+            description="Daughter of the burgomaster",
+            campaign_id="camp-1",
+            race="Human",
+            role="Noble",
+            attitude="friendly",
+            current_status="alive",
+        )
+        assert npc["is_npc"] is True
+        assert npc["npc_description"] == "Daughter of the burgomaster"
+        assert npc["npc_race"] == "Human"
+        assert npc["npc_role"] == "Noble"
+        assert npc["npc_attitude"] == "friendly"
+        assert npc["npc_current_status"] == "alive"
+        assert "camp-1" in npc["campaign_ids"]
+        assert npc["npc_session_history"] == []
+
+        # Verify it persists
+        loaded = _characters_mod.get_character(npc["id"])
+        assert loaded is not None
+        assert loaded["npc_race"] == "Human"
+        assert loaded["npc_attitude"] == "friendly"
