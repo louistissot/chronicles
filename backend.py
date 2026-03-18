@@ -1548,6 +1548,7 @@ end try
         self._glossary_context = self._build_glossary_context()
         self._entity_context = ""  # Clear to prevent cross-session bleed during single-stage reprocessing
         self._session_date = session.get("date", "")
+        self._skip_entity_review = True  # Manual reprocess: save all items without review blocking
         self._stop_llm_stages.discard(stage)
 
         def _run():
@@ -1596,6 +1597,7 @@ end try
                 self._glossary_context = ""
                 self._entity_context = ""
                 self._session_date = ""
+                self._skip_entity_review = False
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
@@ -3092,10 +3094,19 @@ Return ONLY a valid JSON array (no markdown, no explanation):
             for loc in auto_apply
         ]
 
-        if review_queue:
+        if review_queue and not getattr(self, '_skip_entity_review', False):
             _log.info("Locations: %d auto-applied, %d need review", len(auto_apply), len(review_queue))
             decisions = self._request_entity_review("locations", review_queue, auto_applied_summary)
             self._apply_entity_decisions("locations", decisions, locations_with_conf)
+        elif review_queue:
+            # Manual reprocess: auto-apply all locations without review
+            _log.info("Locations: skipping review (manual reprocess), auto-applying all %d", len(review_queue))
+            if self._current_campaign_id:
+                for loc in review_queue:
+                    try:
+                        self._apply_location_entity(loc)
+                    except Exception as e:
+                        _log.warning("Failed to apply location entity '%s': %s", loc.get("name"), e)
 
         _log.info("Locations saved → %s (%d locations)", out_path, len(locations))
         self._notify_stage("locations", "done", {"locations": locations})
@@ -3361,7 +3372,7 @@ Return ONLY a JSON object (no markdown, no explanation):
             for it in all_loot_items if it.get("confidence", 100) >= threshold
         ]
 
-        if review_items:
+        if review_items and not getattr(self, '_skip_entity_review', False):
             _log.info("Loot: %d auto-applied, %d need review", len(auto_applied_summary), len(review_items))
             # Normalize loot items to have a "name" field for the review system
             for it in review_items:
@@ -3371,6 +3382,15 @@ Return ONLY a JSON object (no markdown, no explanation):
                     it["name"] = "Gold: {}".format(it.get("source", ""))
             decisions = self._request_entity_review("loot", review_items, auto_applied_summary)
             self._apply_entity_decisions("loot", decisions, all_loot_items)
+        elif review_items:
+            # Manual reprocess: auto-apply all loot without review
+            _log.info("Loot: skipping review (manual reprocess), auto-applying all %d", len(review_items))
+            if self._current_campaign_id:
+                for it in review_items:
+                    try:
+                        self._apply_loot_entity(it)
+                    except Exception as e:
+                        _log.warning("Failed to apply loot entity '%s': %s", it.get("item", it.get("source")), e)
 
         items_count = len(loot.get("items", []))
         gold_count = len(loot.get("gold", []))

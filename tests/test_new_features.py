@@ -726,3 +726,76 @@ class TestRunSingleStageContext:
 
         assert api._entity_context == ""
         assert api._session_date == ""
+
+
+# ===========================================================================
+# TestSkipEntityReview — manual reprocess skips review blocking
+# ===========================================================================
+
+class TestSkipEntityReview:
+    """Test that _skip_entity_review flag prevents entity review blocking during manual reprocess."""
+
+    def test_save_locations_skips_review_when_flag_set(self, tmp_path):
+        """When _skip_entity_review is True, _request_entity_review should NOT be called."""
+        _, api = _make_api()
+        api._current_campaign_id = "camp-1"
+        api._current_session_id = "sess-1"
+        api._skip_entity_review = True
+
+        locs = [
+            {"name": "Tavern", "description": "A pub", "confidence": 50, "reasoning": "low"},
+        ]
+
+        with patch.object(api, "_repair_json_array", return_value=locs), \
+             patch.object(api, "_request_entity_review") as mock_review, \
+             patch.object(api, "_apply_location_entity"), \
+             patch.object(api, "_notify_stage"), \
+             patch.object(backend, "update_session"), \
+             patch.object(backend, "_find_entity_fuzzy", return_value=None):
+            api._save_locations(json.dumps(locs), tmp_path)
+
+        # Review should NOT have been called
+        mock_review.assert_not_called()
+
+    def test_save_locations_calls_review_when_flag_not_set(self, tmp_path):
+        """When _skip_entity_review is False (pipeline), _request_entity_review IS called for low confidence."""
+        _, api = _make_api()
+        api._current_campaign_id = "camp-1"
+        api._current_session_id = "sess-1"
+        api._skip_entity_review = False
+
+        locs = [
+            {"name": "Tavern", "description": "A pub", "confidence": 50, "reasoning": "low"},
+        ]
+
+        with patch.object(api, "_repair_json_array", return_value=locs), \
+             patch.object(api, "_request_entity_review", return_value=[]) as mock_review, \
+             patch.object(api, "_apply_entity_decisions"), \
+             patch.object(api, "_notify_stage"), \
+             patch.object(backend, "update_session"), \
+             patch.object(backend, "_find_entity_fuzzy", return_value=None):
+            api._save_locations(json.dumps(locs), tmp_path)
+
+        # Review SHOULD have been called
+        mock_review.assert_called_once()
+
+    def test_save_loot_skips_review_when_flag_set(self, tmp_path):
+        """Loot also respects _skip_entity_review flag."""
+        _, api = _make_api()
+        api._current_campaign_id = "camp-1"
+        api._current_session_id = "sess-1"
+        api._skip_entity_review = True
+
+        loot = {
+            "items": [{"item": "Sword", "type": "weapon", "confidence": 50, "reasoning": "low"}],
+            "gold": [],
+        }
+
+        with patch.object(api, "_extract_json_object", return_value=loot), \
+             patch.object(api, "_request_entity_review") as mock_review, \
+             patch.object(api, "_apply_loot_entity"), \
+             patch.object(api, "_notify_stage"), \
+             patch.object(backend, "update_session"):
+            api._save_loot(json.dumps(loot), tmp_path)
+
+        mock_review.assert_not_called()

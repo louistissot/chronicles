@@ -1079,6 +1079,8 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
                           )}
                           <span className="text-sm font-body text-parchment/80 font-semibold">{loc.name}</span>
                           {loc.visited && <span className="text-[8px] uppercase tracking-wider text-emerald-400/70 bg-emerald-400/10 px-1.5 py-0.5 rounded-full">Visited</span>}
+                          {loc.region_type && <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-white/5 text-parchment/30 border border-white/5">{loc.region_type}</span>}
+                          {loc.location_type && <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-gold/8 text-gold/40 border border-gold/10">{loc.location_type}</span>}
                         </div>
                         {loc.description && <p className="mt-1 text-xs text-parchment/55 font-body">{loc.description}</p>}
                         {loc.relative_position && <p className="mt-1 text-[11px] text-parchment/35 font-body italic">{loc.relative_position}</p>}
