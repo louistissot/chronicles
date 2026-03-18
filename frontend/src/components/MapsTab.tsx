@@ -114,6 +114,16 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
   const [loadingEvents, setLoadingEvents] = useState(false)
   const [viewMode, setViewMode] = useState<'map' | 'list'>('map')
   const [listSearch, setListSearch] = useState('')
+  // Memoize list view filtering (must be before any early returns — React hooks rule)
+  const filteredListLocations = useMemo(() => {
+    if (!listSearch) return locations
+    const q = listSearch.toLowerCase()
+    return locations.filter(loc =>
+      loc.name.toLowerCase().includes(q) || loc.description?.toLowerCase().includes(q) ||
+      loc.relative_position?.toLowerCase().includes(q) || loc.connections?.some(c => c.toLowerCase().includes(q))
+    )
+  }, [locations, listSearch])
+
   // Load map + locations on mount
   useEffect(() => {
     if (!campaignId) return
@@ -187,15 +197,6 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
     )
   }
 
-  // Memoize list view filtering
-  const filteredListLocations = useMemo(() => {
-    if (!listSearch) return locations
-    const q = listSearch.toLowerCase()
-    return locations.filter(loc =>
-      loc.name.toLowerCase().includes(q) || loc.description?.toLowerCase().includes(q) ||
-      loc.relative_position?.toLowerCase().includes(q) || loc.connections?.some(c => c.toLowerCase().includes(q))
-    )
-  }, [locations, listSearch])
 
   const selectedLoc = selectedLocation
     ? locations.find(l => l.name.toLowerCase() === selectedLocation.toLowerCase())

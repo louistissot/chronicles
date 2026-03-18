@@ -199,3 +199,6 @@ Campaigns have `beyond_url` (optional). Seasons store character UUIDs. `_migrate
 - **NSFilenamesPboardType deprecated**: use `"public.file-url"` with `readObjectsForClasses_options_`.
 - **pywebview**: `background_color` not `background` in `create_window`. `evaluate_js` must be called from background threads.
 - **Gemini model names**: `gemini-2.5-flash-image` — Google preview model, name may change.
+- **React hooks before early returns**: All `useState`, `useEffect`, `useMemo`, `useCallback` MUST be called BEFORE any `if (...) return` in components. Violating this causes React error #310 ("Rendered more hooks than during the previous render") which crashes the component.
+- **TabErrorBoundary**: App.tsx wraps all tab content in `TabErrorBoundary`. If a tab crashes, it shows an error message instead of blanking the entire app. Uses `key={activeTab}` so switching tabs resets the boundary.
+- **PyInstaller local modules**: Local `.py` files (like `maps.py`) must be added to `datas` in `DnDWhisperX.spec` AND imported at module level in `backend.py` for PyInstaller to bundle them.
