@@ -23,7 +23,7 @@ const LOCATION_ICONS: Record<string, React.ComponentType<{ className?: string }>
   farm: Wheat, camp: Tent, cave: Mountain, dungeon: Mountain,
   ruins: Landmark, fortress: Shield, tower: Shield,
   clearing: TreePine, bridge: Signpost, crossroads: Signpost,
-  manor: Crown, market: Store, other: MapPin,
+  manor: Crown, market: Store, shop: Store, other: MapPin,
 }
 
 // ── Region colors ───────────────────────────────────────────────────────────

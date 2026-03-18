@@ -3002,10 +3002,31 @@ This session took place on {date}. Extract information ONLY from THIS session's 
 ## Characters
 {names}
 
-## Classification
-For each location, also classify:
-- "region_type": terrain/environment around this location. One of: sea, coast, plains, forest, jungle, mountains, desert, swamp, underground, urban, ruins, arctic
-- "location_type": what kind of place it is. One of: city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, other
+## Classification — IMPORTANT: be precise, NEVER default to "other"
+For each location, classify carefully based on the description:
+
+### region_type (terrain/environment AROUND the location):
+sea, coast, plains, forest, jungle, mountains, desert, swamp, underground, urban, ruins, arctic
+- If sailing on open water → "sea". If docked at a port → "coast". If in a city/town → "urban".
+- If in a cave, mine, tunnel, or underground chamber → "underground".
+
+### location_type (what KIND of place it is — read the description carefully!):
+city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, shop, other
+- A place that SELLS things (shop, store, merchant, vendor, stall, emporium) → "shop"
+- Traveling by ship, boat, on the sea, sailing → "ship"
+- A tavern, pub, bar, inn, alehouse, rest house → "inn"
+- A church, cathedral, chapel, holy site, altar room → "temple" or "shrine"
+- A castle, fort, stronghold, garrison, guard post → "fortress"
+- A market square, bazaar, trading post → "market"
+- A private house, estate, villa, mansion → "manor"
+- A farmstead, ranch, homestead, barn → "farm"
+- An encampment, campsite, bivouac → "camp"
+- A cave, cavern, grotto, mine shaft → "cave"
+- A tower, watchtower, wizard's tower, lighthouse → "tower"
+- An ancient ruin, collapsed structure, abandoned building → "ruins"
+- A dungeon, labyrinth, underground complex → "dungeon"
+- Open water, on a vessel at sea → "ship" (NOT "other")
+- ONLY use "other" if NONE of the above categories fit at all
 
 ## Output Format
 Return ONLY a valid JSON array (no markdown, no explanation):
@@ -4034,7 +4055,7 @@ Rules:
 ## Node Classification
 For each location, assign:
 - **region_type**: terrain around this location. One of: sea, coast, plains, forest, jungle, mountains, desert, swamp, underground, urban, ruins, arctic
-- **location_type**: what kind of place it is. One of: city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, other
+- **location_type**: what kind of place it is. One of: city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, shop, other. Use "ship" for open water/sailing, "shop" for stores/vendors/merchants, "inn" for taverns/pubs. NEVER default to "other" unless nothing else fits.
 
 ## Plane Detection
 - Default plane is "Material Plane"
