@@ -7,13 +7,13 @@ import { CharactersTab } from '@/components/CharactersTab'
 import { GlossaryTab } from '@/components/GlossaryTab'
 import { ChronicleTab } from '@/components/ChronicleTab'
 import { TitleScreen, type TitleChoice } from '@/components/TitleScreen'
-import { api, type PipelineStage, type StageStatus, type SpeakerReviewPayload, type EntityReviewPayload, type TranscriptReviewPayload } from '@/lib/api'
+import { api, type PipelineStage, type StageStatus, type SpeakerReviewPayload, type EntityReviewPayload, type FactReviewPayload } from '@/lib/api'
 import type { Campaign, Character } from '@/lib/api'
 import { Scroll, Archive, Sun, Moon, Users, Settings, Shield, ChevronDown, BookOpen, Plus, ArrowLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const EMPTY_CHUNKS: Record<PipelineStage, string> = {
-  transcription: '', saving_transcript: '', transcript_correction: '', speaker_mapping: '', updating_transcript: '', transcript_review: '', timeline: '', summary: '', dm_notes: '', character_updates: '', glossary: '', leaderboard: '', locations: '', npcs: '', loot: '', missions: '', scenes: '', illustration: '',
+  transcription: '', saving_transcript: '', transcript_correction: '', speaker_mapping: '', updating_transcript: '', fact_extraction: '', fact_review: '', timeline: '', summary: '', dm_notes: '', character_updates: '', glossary: '', leaderboard: '', locations: '', npcs: '', loot: '', missions: '', illustration: '',
 }
 
 type Tab = 'characters' | 'library' | 'glossary' | 'chronicle'
@@ -32,7 +32,8 @@ const IDLE_STAGES: PipelineStages = {
   transcript_correction: { status: 'idle' },
   speaker_mapping:    { status: 'idle' },
   updating_transcript:{ status: 'idle' },
-  transcript_review:  { status: 'idle' },
+  fact_extraction:    { status: 'idle' },
+  fact_review:        { status: 'idle' },
   timeline:           { status: 'idle' },
   summary:            { status: 'idle' },
   dm_notes:           { status: 'idle' },
@@ -43,7 +44,6 @@ const IDLE_STAGES: PipelineStages = {
   npcs:               { status: 'idle' },
   loot:               { status: 'idle' },
   missions:           { status: 'idle' },
-  scenes:             { status: 'idle' },
   illustration:       { status: 'idle' },
 }
 
@@ -54,7 +54,7 @@ export type AppState = {
   stages: PipelineStages
   speakerReview: SpeakerReviewPayload | null
   entityReview: EntityReviewPayload | null
-  transcriptReview: TranscriptReviewPayload | null
+  factReview: FactReviewPayload | null
   logLines: Array<{ text: string; isStderr: boolean }>
 }
 
@@ -107,7 +107,7 @@ export default function App() {
     stages: IDLE_STAGES,
     speakerReview: null,
     entityReview: null,
-    transcriptReview: null,
+    factReview: null,
     logLines: [],
   })
   const logLinesRef = useRef<Array<{ text: string; isStderr: boolean }>>([])
@@ -144,7 +144,7 @@ export default function App() {
       setStreamingVersion(v => v + 1)
     }
 
-    const ENTITY_REVIEW_STAGES = ['locations', 'npcs', 'loot', 'missions']
+    const ENTITY_REVIEW_STAGES = ['locations', 'npcs', 'loot', 'missions', 'character_updates', 'glossary']
     window._onPipelineStage = (stage: PipelineStage, status: StageStatus, data: any) => {
       setAppState(s => {
         const next = { ...s, stages: { ...s.stages, [stage]: { status, data, error: data?.error } } }
@@ -161,12 +161,12 @@ export default function App() {
         if (ENTITY_REVIEW_STAGES.includes(stage) && (status === 'done' || status === 'error')) {
           if (s.entityReview?.stage === stage) next.entityReview = null
         }
-        // Transcript review
-        if (stage === 'transcript_review' && status === 'needs_review') {
-          next.transcriptReview = data as TranscriptReviewPayload
+        // Fact review
+        if (stage === 'fact_review' && status === 'needs_review') {
+          next.factReview = data as FactReviewPayload
         }
-        if (stage === 'transcript_review' && (status === 'done' || status === 'error')) {
-          next.transcriptReview = null
+        if (stage === 'fact_review' && (status === 'done' || status === 'error')) {
+          next.factReview = null
         }
         return next
       })
@@ -273,7 +273,7 @@ export default function App() {
       stages: IDLE_STAGES,
       speakerReview: null,
       entityReview: null,
-      transcriptReview: null,
+      factReview: null,
       logLines: [],
     })
     // Show processing in fullscreen session view
@@ -342,7 +342,7 @@ export default function App() {
       stages: IDLE_STAGES,
       speakerReview: null,
       entityReview: null,
-      transcriptReview: null,
+      factReview: null,
       logLines: [],
     })
     setRecordingState({ active: true, paused: false })
@@ -694,7 +694,7 @@ export default function App() {
             pipelineStages={appState.stages}
             speakerReview={appState.speakerReview}
             entityReview={appState.entityReview}
-            transcriptReview={appState.transcriptReview}
+            factReview={appState.factReview}
             logLines={logLinesRef.current}
             logVersion={logVersion}
             streamingChunks={streamingChunksRef.current}
@@ -713,6 +713,7 @@ export default function App() {
             onStopRecording={handleStopRecording}
             showProcessing={showProcessing}
             onBackToSetup={() => setShowProcessing(false)}
+            onNavigateToLibrary={() => { setShowNewSession(false); setShowProcessing(false); setActiveTab('library') }}
           />
         )}
 

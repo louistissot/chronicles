@@ -396,9 +396,10 @@ class TestGlossary:
                 "Vallaki": {"category": "Location", "definition": "Walled town"},
                 "Strahd": {"category": "NPC", "definition": "Vampire lord"},
             }
-            ok = campaigns.smart_merge_glossary(c["id"], terms)
+            added, updated = campaigns.smart_merge_glossary(c["id"], terms)
             glossary = campaigns.get_glossary(c["id"])
-        assert ok is True
+        assert added == 2
+        assert updated == 0
         assert len(glossary) == 2
         assert glossary["Vallaki"]["definition"] == "Walled town"
 
@@ -429,16 +430,16 @@ class TestGlossary:
     def test_smart_merge_nonexistent_campaign(self, tmp_path):
         with _patch_file(tmp_path):
             import campaigns
-            ok = campaigns.smart_merge_glossary("ghost-id", {"X": {"category": "NPC", "definition": "Y"}})
-        assert ok is False
+            added, updated = campaigns.smart_merge_glossary("ghost-id", {"X": {"category": "NPC", "definition": "Y"}})
+        assert added == 0 and updated == 0
 
     def test_smart_merge_empty_new_terms(self, tmp_path):
         with _patch_file(tmp_path):
             import campaigns
             c = campaigns.create_campaign("Camp", [{"number": 1, "characters": ["DM"]}])
             campaigns.merge_glossary(c["id"], {"Existing": {"category": "NPC", "definition": "Stays"}})
-            ok = campaigns.smart_merge_glossary(c["id"], {})
+            added, updated = campaigns.smart_merge_glossary(c["id"], {})
             glossary = campaigns.get_glossary(c["id"])
-        assert ok is True
+        assert added == 0 and updated == 0
         assert len(glossary) == 1
         assert glossary["Existing"]["definition"] == "Stays"

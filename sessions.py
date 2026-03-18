@@ -3,9 +3,14 @@ Session registry — tracks all past sessions in ~/.config/dnd-whisperx/sessions
 Each entry records paths to all generated outputs and session metadata.
 """
 import json
+import logging
+import os
 import pathlib
+import shutil
 from datetime import datetime
 from typing import Optional
+
+_log = logging.getLogger("dnd.sessions")
 
 REGISTRY_FILE = pathlib.Path.home() / ".config" / "dnd-whisperx" / "sessions.json"
 
@@ -19,9 +24,35 @@ def _load() -> list:
     return []
 
 
-def _save(sessions: list) -> None:
+def _save(sessions, force=False):
+    # type: (list, bool) -> None
+    """Save sessions list. Refuses to overwrite non-empty file with empty list
+    unless force=True (used by delete_session). Creates .bak backup and uses
+    atomic write (write to .tmp then os.replace)."""
     REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    REGISTRY_FILE.write_text(json.dumps(sessions, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Guard: refuse to wipe non-empty data
+    if not sessions and not force and REGISTRY_FILE.exists():
+        try:
+            existing = REGISTRY_FILE.read_text(encoding="utf-8").strip()
+            if len(existing) > 2:  # more than "[]"
+                _log.error(
+                    "BLOCKED: attempted to save empty sessions list over %d bytes of data",
+                    len(existing),
+                )
+                return
+        except Exception:
+            pass
+    # Backup existing file before overwrite
+    if REGISTRY_FILE.exists() and REGISTRY_FILE.stat().st_size > 0:
+        bak = REGISTRY_FILE.with_suffix(".json.bak")
+        try:
+            shutil.copy2(str(REGISTRY_FILE), str(bak))
+        except Exception:
+            pass
+    # Atomic write: write to .tmp then rename
+    tmp = REGISTRY_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(sessions, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(str(tmp), str(REGISTRY_FILE))
 
 
 def create_session_folder(
@@ -98,11 +129,14 @@ def register_session(
 def update_session(session_id: str, **fields) -> None:
     """Update fields on an existing session by ID."""
     sessions = _load()
+    found = False
     for entry in sessions:
         if entry["id"] == session_id:
             entry.update(fields)
+            found = True
             break
-    _save(sessions)
+    if found:
+        _save(sessions)
 
 
 def delete_session(session_id: str) -> Optional[str]:
@@ -112,7 +146,7 @@ def delete_session(session_id: str) -> Optional[str]:
         if s["id"] == session_id:
             output_dir = s.get("output_dir")
             sessions.pop(i)
-            _save(sessions)
+            _save(sessions, force=True)
             return output_dir
     return None
 
@@ -120,3 +154,12 @@ def delete_session(session_id: str) -> Optional[str]:
 def get_sessions() -> list:
     """Return all sessions newest-first."""
     return list(reversed(_load()))
+
+
+def get_campaign_session_count(campaign_id: str) -> int:
+    """Count completed sessions for a campaign (those with a txt_path)."""
+    sessions = _load()
+    return sum(
+        1 for s in sessions
+        if s.get("campaign_id") == campaign_id and s.get("txt_path")
+    )

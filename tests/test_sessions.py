@@ -97,6 +97,42 @@ class TestUpdateSession:
         assert s2["summary_path"] is None
 
 
+class TestGetCampaignSessionCount:
+    def test_returns_zero_for_empty_registry(self, sessions_file):
+        import sessions
+        assert sessions.get_campaign_session_count("camp-001") == 0
+
+    def test_counts_sessions_with_txt_path(self, sessions_file):
+        import time
+        import sessions
+        sid1 = _make_session(sessions_file, campaign_id="camp-A")
+        sessions.update_session(sid1, txt_path="/tmp/t1.txt")
+        time.sleep(1.1)  # ensure distinct session IDs (timestamp-based)
+        sid2 = _make_session(sessions_file, campaign_id="camp-A")
+        sessions.update_session(sid2, txt_path="/tmp/t2.txt")
+        assert sessions.get_campaign_session_count("camp-A") == 2
+
+    def test_ignores_sessions_without_txt_path(self, sessions_file):
+        import time
+        import sessions
+        _make_session(sessions_file, campaign_id="camp-A")  # no txt_path
+        time.sleep(1.1)
+        sid2 = _make_session(sessions_file, campaign_id="camp-A")
+        sessions.update_session(sid2, txt_path="/tmp/t.txt")
+        assert sessions.get_campaign_session_count("camp-A") == 1
+
+    def test_isolates_by_campaign_id(self, sessions_file):
+        import time
+        import sessions
+        sid1 = _make_session(sessions_file, campaign_id="camp-A")
+        sessions.update_session(sid1, txt_path="/tmp/a.txt")
+        time.sleep(1.1)
+        sid2 = _make_session(sessions_file, campaign_id="camp-B")
+        sessions.update_session(sid2, txt_path="/tmp/b.txt")
+        assert sessions.get_campaign_session_count("camp-A") == 1
+        assert sessions.get_campaign_session_count("camp-B") == 1
+
+
 class TestDeleteSession:
     def test_delete_removes_session(self, sessions_file):
         import sessions
@@ -124,3 +160,57 @@ class TestDeleteSession:
         remaining = sessions.get_sessions()
         assert len(remaining) == 1
         assert remaining[0]["id"] == sid2
+
+
+# ---------------------------------------------------------------------------
+# Data loss prevention
+# ---------------------------------------------------------------------------
+
+class TestDataLossPrevention:
+    def test_save_blocks_empty_overwrite(self, sessions_file):
+        """_save([]) must NOT wipe a file that already has sessions."""
+        import sessions
+        _make_session(sessions_file)
+        assert len(sessions._load()) == 1
+        # Try to save empty list — should be blocked
+        sessions._save([])
+        assert len(sessions._load()) == 1  # data preserved
+
+    def test_save_allows_empty_with_force(self, sessions_file):
+        """_save([], force=True) should write even when it empties the file."""
+        import sessions
+        _make_session(sessions_file)
+        sessions._save([], force=True)
+        assert len(sessions._load()) == 0
+
+    def test_update_nonexistent_id_preserves_data(self, sessions_file):
+        """update_session with a ghost ID must not corrupt existing data."""
+        import sessions
+        sid = _make_session(sessions_file)
+        sessions.update_session("ghost-id-does-not-exist", summary_path="/x")
+        all_s = sessions.get_sessions()
+        assert len(all_s) == 1
+        assert all_s[0]["id"] == sid
+
+    def test_save_creates_backup(self, sessions_file):
+        """_save() should create a .bak file before overwriting."""
+        import sessions
+        sid = _make_session(sessions_file)
+        # Second save triggers backup of the first
+        sessions.update_session(sid, txt_path="/tmp/t.txt")
+        bak = sessions_file.with_suffix(".json.bak")
+        assert bak.exists()
+
+    def test_atomic_write_uses_tmp(self, sessions_file):
+        """After save, no .tmp file should remain (it was renamed)."""
+        import sessions
+        _make_session(sessions_file)
+        tmp = sessions_file.with_suffix(".json.tmp")
+        assert not tmp.exists()
+
+    def test_delete_last_session_allowed(self, sessions_file):
+        """delete_session (force=True) should work even when result is empty."""
+        import sessions
+        sid = _make_session(sessions_file)
+        sessions.delete_session(sid)
+        assert len(sessions._load()) == 0

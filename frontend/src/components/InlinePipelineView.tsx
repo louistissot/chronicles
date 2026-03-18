@@ -5,14 +5,14 @@
  */
 import { useState, useEffect, useRef } from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { api, type PipelineStage, type SpeakerReviewPayload, type EntityReviewPayload, type TranscriptReviewPayload } from '@/lib/api'
+import { api, type PipelineStage, type SpeakerReviewPayload, type EntityReviewPayload, type FactReviewPayload, type FactCard } from '@/lib/api'
 import { EntityReviewPanel } from './EntityReviewPanel'
 import {
   Loader2, RefreshCw, Mic, FileText,
-  BookMarked, ScrollText, Film, Clock, Check, X,
+  BookMarked, ScrollText, Clock, Check, X,
   ChevronDown, Square, AlertTriangle, CheckCircle2, XCircle, Circle, Wand2,
   Copy, BookOpen, Users, Mic2, SkipForward, Pause, Play, Image, SpellCheck,
-  Trophy, Compass, Gem, Scroll, Pencil,
+  Trophy, Compass, Gem, Scroll, Pencil, Search, ClipboardCheck,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { PipelineStages, StageState } from '@/App'
@@ -39,7 +39,8 @@ export const STAGE_ORDER: { id: PipelineStage; label: string; icon: React.Compon
   { id: 'transcript_correction',label: 'Term Correction',       icon: SpellCheck },
   { id: 'speaker_mapping',      label: 'Speaker ID',            icon: Users },
   { id: 'updating_transcript',  label: 'Update Transcript',     icon: RefreshCw },
-  { id: 'transcript_review',  label: 'Review Transcript',     icon: Pencil },
+  { id: 'fact_extraction',    label: 'Extract Facts',          icon: Search },
+  { id: 'fact_review',        label: 'Review Facts',           icon: ClipboardCheck },
   { id: 'timeline',           label: 'Timeline',           icon: Clock },
   { id: 'summary',            label: 'Summary',            icon: BookMarked },
   { id: 'dm_notes',           label: 'DM Notes',           icon: ScrollText },
@@ -50,7 +51,6 @@ export const STAGE_ORDER: { id: PipelineStage; label: string; icon: React.Compon
   { id: 'npcs',             label: 'NPCs',              icon: Users },
   { id: 'loot',             label: 'Loot',              icon: Gem },
   { id: 'missions',         label: 'Missions',          icon: Scroll },
-  { id: 'scenes',             label: 'Scene Prompts',      icon: Film },
   { id: 'illustration',       label: 'Illustration',       icon: Image },
 ]
 
@@ -72,7 +72,7 @@ export function CopyButton({ text }: { text: string }) {
   )
 }
 
-export const SKIPPABLE_STAGES: PipelineStage[] = ['timeline', 'summary', 'dm_notes', 'character_updates', 'leaderboard', 'locations', 'npcs', 'loot', 'missions', 'scenes']
+export const SKIPPABLE_STAGES: PipelineStage[] = ['timeline', 'summary', 'dm_notes', 'character_updates', 'leaderboard', 'locations', 'npcs', 'loot', 'missions']
 
 // ── Main Component ───────────────────────────────────────────────────────────
 
@@ -80,7 +80,7 @@ interface InlinePipelineViewProps {
   stages: PipelineStages
   speakerReview: SpeakerReviewPayload | null
   entityReview: EntityReviewPayload | null
-  transcriptReview: TranscriptReviewPayload | null
+  factReview: FactReviewPayload | null
   logLines: Array<{ text: string; isStderr: boolean }>
   logVersion: number
   streamingChunks: Record<PipelineStage, string>
@@ -100,14 +100,16 @@ interface InlinePipelineViewProps {
   onPauseRecording?: () => void
   onResumeRecording?: () => void
   onStopRecording?: () => void
+  onNavigateToLibrary?: () => void
 }
 
 export function InlinePipelineView({
-  stages, speakerReview, entityReview, transcriptReview, logLines, logVersion, streamingChunks, streamingVersion,
+  stages, speakerReview, entityReview, factReview, logLines, logVersion, streamingChunks, streamingVersion,
   isTranscribing, onStop, onStopLLMStage, onSkipStage, onBack, onViewSession,
   recordingActive, recordingPaused, recordingSeconds,
   recordingAmplitude, recordingFileSize, amplitudeHistory,
   onPauseRecording, onResumeRecording, onStopRecording,
+  onNavigateToLibrary,
 }: InlinePipelineViewProps) {
   const [activeStage, setActiveStage] = useState<PipelineStage | 'recording'>( recordingActive ? 'recording' : 'transcription')
   const [speakerMap, setSpeakerMap] = useState<Record<string, string>>({})
@@ -140,7 +142,7 @@ export function InlinePipelineView({
 
   const activeState: StageState = activeStage === 'recording' ? { status: recordingActive ? 'running' : 'idle' } : stages[activeStage]
   const chunk = activeStage === 'recording' ? '' : streamingChunks[activeStage as PipelineStage]
-  const LLM_STAGES: PipelineStage[] = ['speaker_mapping', 'summary', 'dm_notes', 'scenes', 'timeline', 'illustration']
+  const LLM_STAGES: PipelineStage[] = ['speaker_mapping', 'fact_extraction', 'summary', 'dm_notes', 'timeline', 'illustration']
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -361,11 +363,30 @@ export function InlinePipelineView({
                 </div>
               )}
 
-              {/* Transcript review */}
-              {activeStage === 'transcript_review' && activeState.status === 'needs_review' && transcriptReview && (
-                <TranscriptReviewPanel
-                  payload={transcriptReview}
-                  onApprove={(correctedText) => api('complete_transcript_review', correctedText)}
+              {/* Completed speaker mapping (read-only) */}
+              {activeStage === 'speaker_mapping' && activeState.status === 'done' && activeState.data?.mapping && (
+                <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-xs font-heading text-emerald-400/80 uppercase tracking-widest">Speaker Mapping Applied</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {Object.entries(activeState.data.mapping as Record<string, string>).map(([sp, name]) => (
+                      <div key={sp} className="flex items-center gap-2">
+                        <span className="text-xs font-mono text-parchment/40 w-24 flex-none">{sp}</span>
+                        <span className="text-xs text-parchment/30">→</span>
+                        <span className="text-xs font-body text-gold/70">{name || '(skipped)'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Fact review */}
+              {activeStage === 'fact_review' && activeState.status === 'needs_review' && factReview && (
+                <FactReviewPanel
+                  payload={factReview}
+                  onSubmit={(decisions) => api('complete_fact_review', decisions)}
                 />
               )}
 
@@ -440,10 +461,7 @@ export function InlinePipelineView({
               )}
 
               {activeState.status === 'done' && !chunk && !(activeStage === 'illustration' && activeState.data?.illustration) && (
-                <div className="flex items-center gap-2 text-emerald-400/70 py-4">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span className="text-xs font-body">Stage complete</span>
-                </div>
+                <StagePreview stage={activeStage} data={activeState.data} />
               )}
               {activeState.status === 'idle' && (
                 <div className="flex items-center gap-3 py-4">
@@ -456,6 +474,23 @@ export function InlinePipelineView({
                   )}
                 </div>
               )}
+
+              {/* Pipeline completion CTA */}
+              {!recordingActive && onNavigateToLibrary && STAGE_ORDER.every(s => {
+                const st = stages[s.id]?.status
+                return st === 'done' || st === 'error'
+              }) && (
+                <div className="py-6 flex flex-col items-center gap-3">
+                  <p className="text-xs text-emerald-400/60 font-body">Pipeline complete</p>
+                  <button
+                    onClick={onNavigateToLibrary}
+                    className="flex items-center gap-2 px-4 py-2 rounded-md border border-gold/30 bg-gold/10 text-sm font-heading text-gold hover:bg-gold/20 hover:border-gold/50 transition-colors uppercase tracking-wider"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    View in Library
+                  </button>
+                </div>
+              )}
             </div>
           </ScrollArea>
         </div>
@@ -464,65 +499,473 @@ export function InlinePipelineView({
   )
 }
 
-// ── Transcript Review Panel ───────────────────────────────────────────────
+// ── Stage Preview (completed stage data summaries) ──────────────────────
 
-function TranscriptReviewPanel({
+function StagePreview({ stage, data }: { stage: string; data?: any }) {
+  const d = data || {}
+
+  // Timeline: show first 3 events
+  if (stage === 'timeline' && Array.isArray(d.timeline) && d.timeline.length > 0) {
+    return (
+      <div className="space-y-1 py-2">
+        <p className="text-[9px] text-parchment/30 uppercase tracking-widest font-heading mb-1">{d.timeline.length} events</p>
+        {d.timeline.slice(0, 3).map((ev: any, i: number) => (
+          <div key={i} className="flex items-start gap-2">
+            <span className="text-[9px] text-gold/40 font-mono shrink-0 w-12">{ev.time || '—'}</span>
+            <span className="text-[10px] text-parchment/60 font-body">{ev.title}</span>
+          </div>
+        ))}
+        {d.timeline.length > 3 && <p className="text-[9px] text-parchment/25 italic">+{d.timeline.length - 3} more</p>}
+      </div>
+    )
+  }
+
+  // Summary: show word count
+  if (stage === 'summary' && d.summary) {
+    const words = String(d.summary).split(/\s+/).length
+    return (
+      <div className="flex items-center gap-2 text-emerald-400/70 py-3">
+        <CheckCircle2 className="w-4 h-4" />
+        <span className="text-xs font-body">Summary generated ({words} words)</span>
+      </div>
+    )
+  }
+
+  // DM Notes
+  if (stage === 'dm_notes' && d.notes) {
+    const lines = String(d.notes).split('\n').filter((l: string) => l.trim()).length
+    return (
+      <div className="flex items-center gap-2 text-emerald-400/70 py-3">
+        <CheckCircle2 className="w-4 h-4" />
+        <span className="text-xs font-body">DM notes generated ({lines} lines)</span>
+      </div>
+    )
+  }
+
+  // Character updates
+  if (stage === 'character_updates' && d.updates) {
+    const count = typeof d.updates === 'object' ? Object.keys(d.updates).length : 0
+    return (
+      <div className="flex items-center gap-2 text-emerald-400/70 py-3">
+        <CheckCircle2 className="w-4 h-4" />
+        <span className="text-xs font-body">{count} character{count !== 1 ? 's' : ''} updated</span>
+      </div>
+    )
+  }
+
+  // Glossary
+  if (stage === 'glossary' && d.glossary) {
+    const terms = typeof d.glossary === 'object' ? Object.keys(d.glossary) : []
+    const sample = terms.slice(0, 5).join(', ')
+    return (
+      <div className="py-2 space-y-1">
+        <div className="flex items-center gap-2 text-emerald-400/70">
+          <CheckCircle2 className="w-4 h-4" />
+          <span className="text-xs font-body">{terms.length} term{terms.length !== 1 ? 's' : ''} extracted</span>
+        </div>
+        {sample && <p className="text-[10px] text-parchment/35 font-body pl-6 truncate">{sample}{terms.length > 5 ? '…' : ''}</p>}
+      </div>
+    )
+  }
+
+  // Leaderboard
+  if (stage === 'leaderboard' && d.leaderboard) {
+    const count = typeof d.leaderboard === 'object' ? Object.keys(d.leaderboard).length : 0
+    return (
+      <div className="flex items-center gap-2 text-emerald-400/70 py-3">
+        <CheckCircle2 className="w-4 h-4" />
+        <span className="text-xs font-body">Leaderboard — {count} hero{count !== 1 ? 'es' : ''}</span>
+      </div>
+    )
+  }
+
+  // Locations / NPCs / Loot / Missions — array or object counts
+  if (['locations', 'npcs', 'missions'].includes(stage)) {
+    const items = d[stage]
+    const count = Array.isArray(items) ? items.length : typeof items === 'object' && items ? Object.keys(items).length : 0
+    if (count > 0) {
+      return (
+        <div className="flex items-center gap-2 text-emerald-400/70 py-3">
+          <CheckCircle2 className="w-4 h-4" />
+          <span className="text-xs font-body">{count} {stage === 'npcs' ? 'NPC' : stage.replace(/s$/, '')}
+            {count !== 1 ? 's' : ''} extracted</span>
+        </div>
+      )
+    }
+  }
+
+  if (stage === 'loot' && d.loot) {
+    const items = d.loot.items || d.loot
+    const count = Array.isArray(items) ? items.length : typeof items === 'object' ? Object.keys(items).length : 0
+    return (
+      <div className="flex items-center gap-2 text-emerald-400/70 py-3">
+        <CheckCircle2 className="w-4 h-4" />
+        <span className="text-xs font-body">{count} loot entr{count !== 1 ? 'ies' : 'y'} extracted</span>
+      </div>
+    )
+  }
+
+  // Fact extraction
+  if (stage === 'fact_extraction' && d.factCount !== undefined) {
+    return (
+      <div className="flex items-center gap-2 text-emerald-400/70 py-3">
+        <CheckCircle2 className="w-4 h-4" />
+        <span className="text-xs font-body">{d.factCount} facts extracted (threshold: {d.threshold}%{d.reviewCount ? `, ${d.reviewCount} for review` : ''})</span>
+      </div>
+    )
+  }
+
+  // Fact review
+  if (stage === 'fact_review' && d.decisions !== undefined) {
+    return (
+      <div className="flex items-center gap-2 text-emerald-400/70 py-3">
+        <CheckCircle2 className="w-4 h-4" />
+        <span className="text-xs font-body">{d.decisions} fact{d.decisions !== 1 ? 's' : ''} reviewed</span>
+      </div>
+    )
+  }
+
+  // Speaker mapping — already has its own preview via the readonly mapping display
+  if (stage === 'speaker_mapping' && d.mapping) {
+    const entries = Object.entries(d.mapping as Record<string, string>)
+    if (entries.length > 0) {
+      return (
+        <div className="py-2 space-y-0.5">
+          <p className="text-[9px] text-parchment/30 uppercase tracking-widest font-heading mb-1">Speaker mapping</p>
+          {entries.map(([spk, name]) => (
+            <div key={spk} className="flex items-center gap-2">
+              <span className="text-[9px] font-mono text-parchment/30 w-20 shrink-0">{spk}</span>
+              <span className="text-[10px] text-gold/60 font-body">{name}</span>
+            </div>
+          ))}
+        </div>
+      )
+    }
+  }
+
+  // Skipped stages
+  if (d.skipped) {
+    return (
+      <div className="flex items-center gap-2 text-parchment/30 py-3">
+        <SkipForward className="w-3.5 h-3.5" />
+        <span className="text-xs font-body italic">Skipped</span>
+      </div>
+    )
+  }
+
+  // Default fallback
+  return (
+    <div className="flex items-center gap-2 text-emerald-400/70 py-3">
+      <CheckCircle2 className="w-4 h-4" />
+      <span className="text-xs font-body">Stage complete</span>
+    </div>
+  )
+}
+
+// ── Fact Review Panel ────────────────────────────────────────────────────
+
+function FactReviewPanel({
   payload,
-  onApprove,
+  onSubmit,
 }: {
-  payload: TranscriptReviewPayload
-  onApprove: (correctedText: string | null) => void
+  payload: FactReviewPayload
+  onSubmit: (decisions: Array<{ id: string; action: 'accept' | 'edit' | 'decline'; segment_indices?: number[]; speaker?: string; edited?: Record<string, any> }>) => void
 }) {
-  const [text, setText] = useState(payload.transcript)
+  type Decision = 'accept' | 'edit' | 'decline'
+  const [decisions, setDecisions] = useState<Record<string, { action: Decision; edited?: Record<string, any> }>>({})
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editState, setEditState] = useState<Record<string, any>>({})
   const [submitting, setSubmitting] = useState(false)
-  const hasEdits = text !== payload.transcript
+  const [showAutoApplied, setShowAutoApplied] = useState(false)
 
-  async function handleApprove() {
+  const allDecided = payload.cards.length === 0 || payload.cards.every(c => decisions[c.id])
+  const autoSubmitRef = useRef(false)
+
+  // Auto-submit when all decisions are made
+  useEffect(() => {
+    if (allDecided && payload.cards.length > 0 && !autoSubmitRef.current && !submitting) {
+      autoSubmitRef.current = true
+      handleSubmit()
+    }
+  }, [allDecided])
+
+  // If no cards to review (all auto-applied), auto-submit immediately
+  useEffect(() => {
+    if (payload.cards.length === 0 && !submitting) {
+      handleSubmit()
+    }
+  }, [])
+
+  function setDecision(id: string, action: Decision, card: FactCard) {
+    setDecisions(prev => ({
+      ...prev,
+      [id]: { action, edited: action === 'edit' ? editState : undefined },
+    }))
+    if (action !== 'edit') setEditingId(null)
+  }
+
+  function startEdit(card: FactCard) {
+    setEditingId(card.id)
+    setEditState({
+      who: card.who,
+      what: card.what,
+      why: card.why,
+      when: card.when,
+      speaker: card.speaker,
+    })
+  }
+
+  function confirmEdit(card: FactCard) {
+    setDecisions(prev => ({
+      ...prev,
+      [card.id]: { action: 'edit', edited: { ...editState } },
+    }))
+    setEditingId(null)
+  }
+
+  function batchAction(action: Decision) {
+    const bulk: Record<string, { action: Decision }> = {}
+    payload.cards.forEach(c => { bulk[c.id] = { action } })
+    setDecisions(bulk)
+  }
+
+  async function handleSubmit() {
     setSubmitting(true)
-    await onApprove(hasEdits ? text : null)
+    const result = payload.cards.map(c => {
+      const d = decisions[c.id] || { action: 'accept' as Decision }
+      return {
+        id: c.id,
+        action: d.action as 'accept' | 'edit' | 'decline',
+        segment_indices: c.segment_indices,
+        speaker: c.speaker,
+        who: c.who,
+        edited: d.edited,
+      }
+    })
+    await onSubmit(result)
     setSubmitting(false)
+  }
+
+  const confColor = (conf: number) =>
+    conf >= 90 ? 'text-emerald-400/70 border-emerald-400/20 bg-emerald-400/5' :
+    conf >= 70 ? 'text-amber-400/70 border-amber-400/20 bg-amber-400/5' :
+    'text-red-400/70 border-red-400/20 bg-red-400/5'
+
+  const TYPE_COLORS: Record<string, string> = {
+    action: 'text-blue-400/70 border-blue-400/20',
+    dialogue: 'text-parchment/50 border-parchment/15',
+    event: 'text-purple-400/70 border-purple-400/20',
+    decision: 'text-gold/70 border-gold/20',
+    discovery: 'text-emerald-400/70 border-emerald-400/20',
+    combat: 'text-red-400/70 border-red-400/20',
   }
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <Pencil className="w-4 h-4 text-gold/60" />
-        <div>
+        <ClipboardCheck className="w-4 h-4 text-gold/60" />
+        <div className="flex-1">
           <h3 className="text-sm font-heading text-parchment/80 uppercase tracking-widest">
-            Review Transcript
+            Review Facts
           </h3>
           <p className="text-[10px] font-body text-parchment/40 mt-0.5">
-            Review and correct speaker attributions or misheard words before AI analysis.
+            Review extracted facts. Edit speaker attributions or details if the AI got something wrong.
           </p>
         </div>
       </div>
 
-      <div className="rounded-md border border-white/10 overflow-hidden">
-        <textarea
-          value={text}
-          onChange={e => setText(e.target.value)}
-          className="w-full bg-void/60 text-[11px] text-parchment/70 font-mono leading-relaxed p-3 outline-none resize-y min-h-[40vh] max-h-[60vh]"
-          spellCheck={false}
-        />
+      {/* Auto-applied summary */}
+      {payload.auto_applied.length > 0 && (
+        <div className="rounded-md border border-emerald-500/15 bg-emerald-500/5 px-3 py-2">
+          <button onClick={() => setShowAutoApplied(!showAutoApplied)}
+            className="flex items-center gap-2 w-full text-left">
+            <CheckCircle2 className="w-3 h-3 text-emerald-400/60" />
+            <span className="text-[10px] font-heading text-emerald-400/60 uppercase tracking-widest">
+              {payload.auto_applied.length} facts auto-accepted (high confidence)
+            </span>
+            <ChevronDown className={cn('w-3 h-3 text-emerald-400/40 ml-auto transition-transform', showAutoApplied && 'rotate-180')} />
+          </button>
+          {showAutoApplied && (
+            <div className="mt-2 space-y-1 pl-5">
+              {payload.auto_applied.map(f => (
+                <p key={f.id} className="text-[10px] text-parchment/35 font-body">
+                  <span className="text-gold/50">{f.who}</span> — {f.what}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Batch actions */}
+      {payload.cards.length > 1 && (
+        <div className="flex items-center gap-2">
+          <button onClick={() => batchAction('accept')}
+            className="px-2 py-0.5 rounded border border-emerald-400/20 text-[10px] text-emerald-400/60 hover:bg-emerald-400/10 transition-colors">
+            Accept All
+          </button>
+          <button onClick={() => batchAction('decline')}
+            className="px-2 py-0.5 rounded border border-red-400/20 text-[10px] text-red-400/60 hover:bg-red-400/10 transition-colors">
+            Decline All
+          </button>
+        </div>
+      )}
+
+      {/* Review cards */}
+      <div className="space-y-2">
+        {payload.cards.map(card => {
+          const d = decisions[card.id]
+          const isEditing = editingId === card.id
+          const isDecided = !!d
+          const isCollapsed = isDecided && !isEditing
+          const displayWho = (isDecided && d.edited?.who) || card.who
+          const displayWhat = (isDecided && d.edited?.what) || card.what
+
+          return (
+            <div key={card.id} className={cn(
+              'rounded-md border transition-all',
+              isCollapsed ? 'px-3 py-2' : 'p-3',
+              isDecided && d.action === 'accept' ? 'border-emerald-400/15 bg-emerald-400/5' :
+              isDecided && d.action === 'decline' ? 'border-red-400/15 bg-red-400/5' :
+              isDecided && d.action === 'edit' ? 'border-gold/20 bg-gold/5' :
+              'border-white/10 bg-void/40',
+            )}>
+              {/* Collapsed compact header */}
+              {isCollapsed && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-heading text-gold/60 shrink-0">{displayWho}</span>
+                  <span className={cn('text-[9px] font-mono px-1 py-0.5 rounded border shrink-0', TYPE_COLORS[card.type] || TYPE_COLORS.event)}>
+                    {card.type}
+                  </span>
+                  <span className="text-[10px] text-parchment/40 font-body truncate flex-1">{displayWhat}</span>
+                  <span className={cn('text-[9px] font-mono px-1 py-0.5 rounded shrink-0',
+                    d.action === 'accept' ? 'text-emerald-400/80 bg-emerald-400/10' :
+                    d.action === 'decline' ? 'text-red-400/80 bg-red-400/10' :
+                    'text-gold/80 bg-gold/10',
+                  )}>
+                    {d.action}
+                  </span>
+                  <button onClick={() => setDecisions(prev => { const next = { ...prev }; delete next[card.id]; return next })}
+                    className="text-[10px] text-parchment/25 hover:text-parchment/50 transition-colors shrink-0">
+                    ↩
+                  </button>
+                </div>
+              )}
+
+              {/* Full card body — hidden when collapsed */}
+              <div className={cn('transition-all duration-300 overflow-hidden',
+                isCollapsed ? 'max-h-0 opacity-0' : 'max-h-[2000px] opacity-100'
+              )}>
+                {/* Card header */}
+                <div className="flex items-start gap-2 mb-2">
+                  <div className="flex-1 space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-heading text-gold/80">{card.who}</span>
+                      <span className={cn('text-[9px] font-mono px-1 py-0.5 rounded border', TYPE_COLORS[card.type] || TYPE_COLORS.event)}>
+                        {card.type}
+                      </span>
+                      <span className={cn('text-[9px] font-mono px-1 py-0.5 rounded border', confColor(card.confidence))}>
+                        {card.confidence}%
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-parchment/70 font-body leading-snug">{card.what}</p>
+                    {card.why && (
+                      <p className="text-[10px] text-parchment/40 font-body italic">Why: {card.why}</p>
+                    )}
+                    {card.when && (
+                      <p className="text-[10px] text-parchment/35 font-body">When: {card.when}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Speaker + original text */}
+                <div className="mb-2 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] text-parchment/30 uppercase tracking-widest">Speaker:</span>
+                    <span className="text-[10px] font-mono text-parchment/50">{card.speaker}</span>
+                  </div>
+                  {card.original_text && (
+                    <pre className="text-[9px] text-parchment/30 font-mono leading-relaxed bg-void/60 rounded px-2 py-1.5 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                      {card.original_text}
+                    </pre>
+                  )}
+                  {card.reasoning && (
+                    <p className="text-[9px] italic text-parchment/25 font-body">{card.reasoning}</p>
+                  )}
+                </div>
+
+                {/* Edit mode */}
+                {isEditing && (
+                  <div className="space-y-2 mb-2 p-2 rounded border border-gold/15 bg-gold/5">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[9px] text-parchment/40 uppercase tracking-widest">Who</label>
+                        <input value={editState.who || ''} onChange={e => setEditState(s => ({ ...s, who: e.target.value }))}
+                          className="w-full bg-void/80 border border-white/10 rounded px-2 py-1 text-[10px] text-parchment/80 outline-none mt-0.5" />
+                      </div>
+                      <div>
+                        <label className="text-[9px] text-parchment/40 uppercase tracking-widest">Speaker</label>
+                        <select value={editState.speaker || ''} onChange={e => setEditState(s => ({ ...s, speaker: e.target.value }))}
+                          className="w-full bg-void/80 border border-white/10 rounded px-2 py-1 text-[10px] text-parchment/80 outline-none mt-0.5" style={{ colorScheme: 'dark' }}>
+                          {payload.character_names.map(n => <option key={n} value={n}>{n}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-parchment/40 uppercase tracking-widest">What</label>
+                      <textarea value={editState.what || ''} onChange={e => setEditState(s => ({ ...s, what: e.target.value }))}
+                        className="w-full bg-void/80 border border-white/10 rounded px-2 py-1 text-[10px] text-parchment/80 outline-none mt-0.5 resize-y min-h-[3rem]" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[9px] text-parchment/40 uppercase tracking-widest">Why</label>
+                        <input value={editState.why || ''} onChange={e => setEditState(s => ({ ...s, why: e.target.value }))}
+                          className="w-full bg-void/80 border border-white/10 rounded px-2 py-1 text-[10px] text-parchment/80 outline-none mt-0.5" />
+                      </div>
+                      <div>
+                        <label className="text-[9px] text-parchment/40 uppercase tracking-widest">When</label>
+                        <input value={editState.when || ''} onChange={e => setEditState(s => ({ ...s, when: e.target.value }))}
+                          className="w-full bg-void/80 border border-white/10 rounded px-2 py-1 text-[10px] text-parchment/80 outline-none mt-0.5" />
+                      </div>
+                    </div>
+                    <button onClick={() => confirmEdit(card)}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-gold/15 border border-gold/25 text-[10px] text-gold/80 hover:bg-gold/25 transition-colors">
+                      <Check className="w-3 h-3" />Confirm Edit
+                    </button>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                {!isDecided && !isEditing && (
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setDecision(card.id, 'accept', card)}
+                      className="px-2 py-0.5 rounded border border-emerald-400/20 text-[10px] text-emerald-400/60 hover:bg-emerald-400/10 transition-colors">
+                      Accept
+                    </button>
+                    <button onClick={() => startEdit(card)}
+                      className="px-2 py-0.5 rounded border border-gold/20 text-[10px] text-gold/60 hover:bg-gold/10 transition-colors">
+                      Edit
+                    </button>
+                    <button onClick={() => setDecision(card.id, 'decline', card)}
+                      className="px-2 py-0.5 rounded border border-red-400/20 text-[10px] text-red-400/60 hover:bg-red-400/10 transition-colors">
+                      Decline
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
       </div>
 
-      <div className="flex items-center justify-between">
-        {hasEdits && (
-          <span className="text-[10px] font-body text-amber-400/60 italic">
-            Transcript has been modified
-          </span>
-        )}
-        {!hasEdits && (
-          <span className="text-[10px] font-body text-parchment/30 italic">
-            No changes made
-          </span>
-        )}
+      {/* Submit */}
+      {payload.cards.length > 0 && (
         <button
-          onClick={handleApprove}
-          disabled={submitting}
+          onClick={handleSubmit}
+          disabled={!allDecided || submitting}
           className={cn(
-            'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-heading uppercase tracking-widest transition-all',
-            submitting
+            'w-full flex items-center justify-center gap-2 py-2 rounded-md text-xs font-heading uppercase tracking-widest transition-all',
+            !allDecided || submitting
               ? 'bg-white/5 text-parchment/30 border border-white/10 cursor-not-allowed'
               : 'bg-emerald-400/15 text-emerald-400 border border-emerald-400/25 hover:bg-emerald-400/25',
           )}
@@ -531,9 +974,9 @@ function TranscriptReviewPanel({
             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
             : <Check className="w-3.5 h-3.5" />
           }
-          {hasEdits ? 'Apply & Continue' : 'Approve & Continue'}
+          Approve & Continue
         </button>
-      </div>
+      )}
     </div>
   )
 }

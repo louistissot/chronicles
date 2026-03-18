@@ -29,6 +29,7 @@ Map each SPEAKER_XX to one of the participant names and provide a confidence sco
 - Multiple speaker IDs can map to the same participant (diarization sometimes splits one person).
 - If there are many more speaker IDs than participants, most IDs share a person — that is expected and normal.
 - Use "Unknown" only if you truly cannot tell, with confidence 0.
+- Some parts of the audio may contain non-D&D content: side conversations about food, breaks, phone calls, or other off-topic chatter. If you are 100% certain a speaker segment is entirely non-D&D content, note this in the evidence field with "[NON-DND]" prefix. Only flag content as non-D&D if you are completely sure — when in doubt, treat it as game content.
 
 Respond with ONLY a valid JSON object mapping every speaker ID to an object with "name", "confidence", and "evidence". Example:
 {{"SPEAKER_00": {{"name": "Dungeon Master", "confidence": 95, "evidence": "Describes scenes, plays NPCs, uses game mechanics language"}}, "SPEAKER_01": {{"name": "Alice", "confidence": 85, "evidence": "References backstory about being a ranger, mentions their wolf companion"}}}}

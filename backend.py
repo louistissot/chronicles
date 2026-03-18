@@ -77,6 +77,7 @@ from postprocess import (
 from runner import TranscriptionJob
 from sessions import (
     create_session_folder,
+    get_campaign_session_count,
     get_sessions,
     register_session,
     update_session,
@@ -362,9 +363,9 @@ class API:
         self._pending_entity_reviews = {}  # type: Dict[str, threading.Event]
         self._entity_review_decisions = {}  # type: Dict[str, list]
 
-        # Transcript review state (human-in-the-loop for transcript corrections)
-        self._pending_transcript_review = None  # type: Optional[threading.Event]
-        self._reviewed_transcript_text = None  # type: Optional[str]
+        # Fact review state (human-in-the-loop for extracted facts)
+        self._pending_fact_review = None  # type: Optional[threading.Event]
+        self._fact_review_decisions = []  # type: List[dict]
 
     @property
     def _window(self) -> Optional[webview.Window]:
@@ -1061,27 +1062,21 @@ end try
                         evidence[sp] = retry_evidence.get(sp, "")
                 _log.info("After retry — confidences: %s", confidences)
 
-            unmapped = [sp for sp, name in mapping.items() if name == "Unknown"]
-            still_low = [
-                sp for sp, conf in confidences.items()
-                if conf < CONFIDENCE_THRESHOLD and sp not in unmapped
-            ]
-            if unmapped or still_low:
-                review_speakers = list(set(unmapped + still_low))
-                _log.info("Speaker mapping needs review — unmapped: %s, low-conf: %s", unmapped, still_low)
-                self._pending_pipeline_json = str(json_path)
-                self._notify_stage("speaker_mapping", "needs_review", {
-                    "jsonPath": str(json_path),
-                    "partialMapping": mapping,
-                    "unmappedSpeakers": review_speakers,
-                    "characterNames": character_names,
-                    "sampleLines": review_samples,
-                    "confidences": confidences,
-                    "evidence": evidence,
-                })
-                return  # resumed via complete_speaker_mapping()
-            else:
-                _log.info("Speaker mapping complete (all ≥%d%%): %s", CONFIDENCE_THRESHOLD, mapping)
+            # Always send to review — let user confirm/adjust all mappings
+            all_speakers = list(mapping.keys())
+            _log.info("Speaker mapping done — sending all %d speakers for review: %s",
+                       len(all_speakers), mapping)
+            self._pending_pipeline_json = str(json_path)
+            self._notify_stage("speaker_mapping", "needs_review", {
+                "jsonPath": str(json_path),
+                "partialMapping": mapping,
+                "unmappedSpeakers": all_speakers,
+                "characterNames": character_names,
+                "sampleLines": review_samples,
+                "confidences": confidences,
+                "evidence": evidence,
+            })
+            return  # resumed via complete_speaker_mapping()
 
         except Exception as e:
             _log.error("Speaker mapping failed: %s", e, exc_info=True)
@@ -1103,8 +1098,6 @@ end try
                 "error": str(e),
             })
             return
-
-        self._continue_pipeline(json_path, mapping)
 
     def _continue_pipeline(self, json_path: Path, mapping: dict) -> None:
         """Apply speaker mapping → save labeled transcript → run LLM stages.
@@ -1157,33 +1150,124 @@ end try
             self._notify_stage("scenes", "error", {"error": "No text transcript produced"})
             return
 
-        # ── Transcript review (human-in-the-loop) ──────────────────────
-        if "transcript_review" not in self._skipped_stages:
+        # ── Fact extraction (LLM) + Fact review (human-in-the-loop) ────
+        if "fact_extraction" not in self._skipped_stages:
             try:
                 transcript_text = Path(txt_path).read_text(encoding="utf-8")
-                self._pending_transcript_review = threading.Event()
-                self._reviewed_transcript_text = None
-                self._notify_stage("transcript_review", "needs_review", {
-                    "transcript": transcript_text,
-                    "txtPath": str(txt_path),
-                })
-                self._pending_transcript_review.wait()  # blocks until user approves
-                self._pending_transcript_review = None
+                self._notify_stage("fact_extraction", "running", None)
+                raw = self._generate_fact_extraction_streaming(
+                    str(txt_path), character_names, transcript=transcript_text,
+                )
+                facts = self._repair_json_array(raw)
+                if not facts:
+                    raise ValueError("Could not parse facts JSON from LLM output")
 
-                # Apply corrections if user edited the transcript
-                if self._reviewed_transcript_text is not None:
-                    Path(txt_path).write_text(
-                        self._reviewed_transcript_text, encoding="utf-8"
+                # Assign UUIDs to facts that don't have them
+                import uuid as _uuid
+                for f in facts:
+                    if not f.get("id"):
+                        f["id"] = str(_uuid.uuid4())
+
+                # Save raw facts
+                out_dir = json_path.parent
+                facts_path = out_dir / "facts.json"
+                facts_path.write_text(
+                    json.dumps(facts, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                if self._current_session_id:
+                    update_session(self._current_session_id, facts_path=str(facts_path))
+
+                # Adaptive confidence threshold
+                threshold = self._get_fact_review_threshold()
+                auto_applied = [f for f in facts if f.get("confidence", 0) >= threshold]
+                review_queue = [f for f in facts if f.get("confidence", 0) < threshold]
+
+                _log.info(
+                    "Fact extraction done — %d facts, threshold=%d, "
+                    "%d auto-applied, %d need review",
+                    len(facts), threshold, len(auto_applied), len(review_queue),
+                )
+                self._notify_stage("fact_extraction", "done", {
+                    "factCount": len(facts),
+                    "reviewCount": len(review_queue),
+                    "threshold": threshold,
+                })
+
+                # Fact review (human-in-the-loop)
+                if "fact_review" not in self._skipped_stages:
+                    corrections, name_corrections = self._request_fact_review(
+                        review_queue, auto_applied, str(json_path), mapping, str(txt_path),
                     )
-                    _log.info(
-                        "Transcript corrected by user (%d chars)",
-                        len(self._reviewed_transcript_text),
-                    )
-                self._notify_stage("transcript_review", "done", None)
+                    if corrections:
+                        from postprocess import apply_fact_corrections
+                        new_txt, new_srt = apply_fact_corrections(
+                            str(json_path), mapping, corrections,
+                            json_path.parent,
+                        )
+                        if new_txt:
+                            txt_path = new_txt
+                            if self._current_session_id:
+                                update_session(
+                                    self._current_session_id,
+                                    txt_path=str(new_txt),
+                                    srt_path=str(new_srt) if new_srt else None,
+                                )
+                            _log.info("Transcript corrected from fact review → %s", new_txt)
+                    # Apply name corrections (find/replace in transcript text)
+                    if name_corrections:
+                        try:
+                            txt_content = Path(txt_path).read_text(encoding="utf-8")
+                            for old_name, new_name in name_corrections.items():
+                                txt_content = txt_content.replace(old_name, new_name)
+                            Path(txt_path).write_text(txt_content, encoding="utf-8")
+                            _log.info("Applied %d name correction(s) to transcript: %s",
+                                      len(name_corrections), name_corrections)
+                            # Inject corrections into glossary context for downstream stages
+                            notes = "\n".join(
+                                "Note: '{}' is correctly spelled '{}'".format(old, new)
+                                for old, new in name_corrections.items()
+                            )
+                            self._name_corrections = name_corrections
+                            # Prepend to glossary context so all LLM stages see it
+                            existing_ctx = getattr(self, '_glossary_context', '') or ''
+                            self._glossary_context = "\n" + notes + existing_ctx
+                        except Exception as e:
+                            _log.error("Failed to apply name corrections: %s", e)
+                else:
+                    self._notify_stage("fact_review", "done", {"skipped": True})
+
             except Exception as e:
-                _log.error("Transcript review failed: %s", e, exc_info=True)
-                self._notify_stage("transcript_review", "error", {"error": str(e)})
-                # Continue anyway — don't block the pipeline on review errors
+                _log.error("Fact extraction failed: %s", e, exc_info=True)
+                self._notify_stage("fact_extraction", "error", {"error": str(e)})
+                # Continue anyway — don't block the pipeline on extraction errors
+        else:
+            self._notify_stage("fact_extraction", "done", {"skipped": True})
+            self._notify_stage("fact_review", "done", {"skipped": True})
+
+        # Build facts-as-context for downstream LLM stages
+        self._facts_context = ""
+        try:
+            facts_file = txt_path.parent / "facts.json"
+            if facts_file.exists():
+                all_facts = json.loads(facts_file.read_text(encoding="utf-8"))
+                # Only include accepted/high-confidence facts
+                relevant = [f for f in all_facts if f.get("confidence", 0) >= 70]
+                if relevant:
+                    lines = []
+                    for f in relevant:
+                        who = f.get("who", "")
+                        what = f.get("what", "")
+                        when = f.get("when", "")
+                        ftype = f.get("type", "")
+                        line = "- [{type}] {who}: {what}".format(type=ftype, who=who, what=what)
+                        if when:
+                            line += " (when: {})".format(when)
+                        lines.append(line)
+                    self._facts_context = "\n\n## Key Events Summary (extracted facts)\n" + "\n".join(lines)
+                    _log.info("Facts context built (%d facts, %d chars)", len(relevant), len(self._facts_context))
+        except Exception as e:
+            _log.warning("Could not build facts context: %s", e)
 
         self._run_llm_stages(str(txt_path), character_names)
 
@@ -1202,15 +1286,122 @@ end try
         ).start()
         return {"ok": True}
 
-    def complete_transcript_review(self, corrected_text):
-        # type: (Optional[str]) -> dict
-        """Resume pipeline after user reviews/edits transcript. None = approved as-is."""
-        _log.info("complete_transcript_review  edited=%s", corrected_text is not None)
-        self._reviewed_transcript_text = corrected_text
-        event = self._pending_transcript_review
+    def complete_fact_review(self, decisions):
+        # type: (list) -> dict
+        """Resume pipeline after user reviews/edits extracted facts.
+
+        decisions: list of {id, action: 'accept'|'edit'|'decline', edited?: {...}}
+        """
+        _log.info("complete_fact_review  decisions=%d", len(decisions))
+        self._fact_review_decisions = decisions
+        event = self._pending_fact_review
         if event:
             event.set()
         return {"ok": True}
+
+    def _get_fact_review_threshold(self):
+        # type: () -> int
+        """Adaptive confidence threshold based on completed campaign sessions."""
+        if not self._current_campaign_id:
+            return 0  # review everything if no campaign
+        count = get_campaign_session_count(self._current_campaign_id)
+        if count <= 1:
+            return 101  # review ALL facts (nothing can be >= 101)
+        elif count == 2:
+            return 98
+        elif count == 3:
+            return 95
+        else:
+            return 90
+
+    def _request_fact_review(self, review_queue, auto_applied, json_path, mapping, txt_path):
+        # type: (list, list, str, dict, str) -> list
+        """Block pipeline until user reviews extracted facts. Returns speaker corrections."""
+        cards = []
+        for fact in review_queue:
+            cards.append({
+                "id": fact.get("id", ""),
+                "type": fact.get("type", "event"),
+                "who": fact.get("who", ""),
+                "what": fact.get("what", ""),
+                "why": fact.get("why", ""),
+                "when": fact.get("when", ""),
+                "speaker": fact.get("speaker", ""),
+                "segment_indices": fact.get("segment_indices", []),
+                "original_text": fact.get("original_text", ""),
+                "confidence": fact.get("confidence", 50),
+                "reasoning": fact.get("reasoning", ""),
+            })
+
+        auto_summary = []
+        for fact in auto_applied:
+            auto_summary.append({
+                "id": fact.get("id", ""),
+                "who": fact.get("who", ""),
+                "what": fact.get("what", ""),
+                "confidence": fact.get("confidence", 100),
+            })
+
+        review_payload = {
+            "stage": "fact_review",
+            "cards": cards,
+            "auto_applied": auto_summary,
+            "json_path": json_path,
+            "txt_path": txt_path,
+            "character_names": self._current_character_names or [],
+        }
+
+        self._pending_fact_review = threading.Event()
+        self._fact_review_decisions = []
+
+        self._notify_stage("fact_review", "needs_review", review_payload)
+        _log.info(
+            "Fact review requested — %d cards, %d auto-applied. Waiting for DM...",
+            len(cards), len(auto_summary),
+        )
+        self._pending_fact_review.wait()
+
+        decisions = list(self._fact_review_decisions)
+        self._pending_fact_review = None
+        self._fact_review_decisions = []
+
+        _log.info("Fact review completed — %d decisions", len(decisions))
+        self._notify_stage("fact_review", "done", {"decisions": len(decisions)})
+
+        # Extract speaker corrections from edited facts
+        corrections = []  # type: List[dict]
+        name_corrections = {}  # type: Dict[str, str]  # old_name -> new_name
+        for d in decisions:
+            if d.get("action") == "decline":
+                continue
+            edited = d.get("edited") or {}
+            # Collect name corrections (who field edits)
+            original_who = d.get("who", "")
+            edited_who = edited.get("who", "")
+            if edited_who and original_who and edited_who != original_who:
+                name_corrections[original_who] = edited_who
+            segment_indices = d.get("segment_indices", [])
+            if not segment_indices:
+                continue
+            correction = {"segment_indices": segment_indices}
+            has_change = False
+            if edited.get("corrected_speaker"):
+                correction["corrected_speaker"] = edited["corrected_speaker"]
+                has_change = True
+            if edited.get("corrected_text"):
+                correction["corrected_text"] = edited["corrected_text"]
+                has_change = True
+            # Also handle speaker correction from the 'speaker' field edit
+            if edited.get("speaker") and edited["speaker"] != d.get("speaker"):
+                correction["corrected_speaker"] = edited["speaker"]
+                has_change = True
+            if has_change:
+                corrections.append(correction)
+
+        if name_corrections:
+            _log.info("Fact review name corrections: %s", name_corrections)
+
+        return corrections, name_corrections
 
     # ── LLM helpers (internal) ────────────────────────────────────────────────
 
@@ -1361,7 +1552,6 @@ end try
                         "npcs": self._generate_npcs_streaming,
                         "loot": self._generate_loot_streaming,
                         "missions": self._generate_missions_streaming,
-                        "scenes": self._generate_scenes_streaming,
                     }
                     save_fns = {
                         "timeline": self._save_timeline,
@@ -1374,7 +1564,6 @@ end try
                         "npcs": self._save_npcs,
                         "loot": self._save_loot,
                         "missions": self._save_missions,
-                        "scenes": self._save_scenes,
                     }
                     self._notify_stage(stage, "running", None)
                     result = generate_fns[stage](txt_path, character_names)
@@ -1401,17 +1590,17 @@ end try
         with self._job_lock:
             if self._job:
                 self._job.stop()
-        all_stages = ["transcript_correction", "speaker_mapping", "updating_transcript", "transcript_review", "timeline", "summary", "dm_notes", "character_updates", "glossary", "leaderboard", "locations", "npcs", "loot", "missions", "scenes", "illustration"]
+        all_stages = ["transcript_correction", "speaker_mapping", "updating_transcript", "fact_extraction", "fact_review", "timeline", "summary", "dm_notes", "character_updates", "glossary", "leaderboard", "locations", "npcs", "loot", "missions", "illustration"]
         for stage in all_stages:
             self._stop_llm_stages.add(stage)
         # Unblock any pending entity reviews to prevent zombie threads
         for event in self._pending_entity_reviews.values():
             event.set()
         self._pending_entity_reviews.clear()
-        # Unblock pending transcript review
-        if self._pending_transcript_review:
-            self._pending_transcript_review.set()
-            self._pending_transcript_review = None
+        # Unblock pending fact review
+        if self._pending_fact_review:
+            self._pending_fact_review.set()
+            self._pending_fact_review = None
 
     # ── Entity Review (Human-in-the-Loop) ─────────────────────────────────
 
@@ -1454,6 +1643,7 @@ end try
             "session_id": self._current_session_id or "",
             "cards": cards,
             "auto_applied": auto_applied,
+            "character_names": list(self._current_character_names) if hasattr(self, '_current_character_names') and self._current_character_names else [],
         }
 
         # Create blocking event
@@ -1493,7 +1683,9 @@ end try
             "locations": "location",
             "loot": "item",
             "missions": "mission",
+            "character_updates": None,  # character updates go through characters.py history
             "npcs": None,  # NPCs go through characters.py, not entities
+            "glossary": None,  # glossary goes through campaigns.py
         }.get(stage)
 
     @staticmethod
@@ -1573,6 +1765,10 @@ end try
         if transcript is None:
             transcript = Path(txt_path).read_text(encoding="utf-8")
         names_str = ", ".join(character_names) if character_names else "Unknown"
+        glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
         session_date = getattr(self, '_session_date', '')
         prompt = f"""You are a Dungeon Master's assistant. Write a **recap summary** of this D&D session.
 
@@ -1584,7 +1780,7 @@ Do NOT use bullet points or headers. Write flowing prose only.
 This session took place on {session_date}. Extract information ONLY from THIS session's transcript.
 
 ## Characters
-{names_str}
+{names_str}{glossary_ctx}
 
 ## Session Transcript
 {transcript}"""
@@ -1653,9 +1849,24 @@ This session took place on {session_date}. Extract information ONLY from THIS se
 
         # Load glossary context once for all stages
         self._glossary_context = self._build_glossary_context()
+        # Prepend facts context if available
+        facts_ctx = getattr(self, '_facts_context', '')
+        if facts_ctx:
+            self._glossary_context = facts_ctx + (self._glossary_context or "")
         if self._glossary_context:
-            _log.info("Glossary context loaded (%d chars) — will inject into LLM stages",
+            _log.info("Glossary+facts context loaded (%d chars) — will inject into LLM stages",
                       len(self._glossary_context))
+
+        # Load entity context once for all stages
+        self._entity_context = ""
+        if self._current_campaign_id:
+            try:
+                from entities import get_entity_context_for_llm as _get_entity_context
+                self._entity_context = _get_entity_context(self._current_campaign_id)
+                if self._entity_context:
+                    _log.info("Entity context loaded (%d chars)", len(self._entity_context))
+            except Exception as e:
+                _log.error("Could not load entity context: %s", e)
 
         stages = [
             ("timeline", self._generate_timeline_streaming, self._save_timeline),
@@ -1668,7 +1879,6 @@ This session took place on {session_date}. Extract information ONLY from THIS se
             ("npcs", self._generate_npcs_streaming, self._save_npcs),
             ("loot", self._generate_loot_streaming, self._save_loot),
             ("missions", self._generate_missions_streaming, self._save_missions),
-            ("scenes", self._generate_scenes_streaming, self._save_scenes),
         ]
 
         for stage_name, generate_fn, save_fn in stages:
@@ -1962,20 +2172,6 @@ Do NOT include any text, labels, or UI elements in the prompt. Write ONLY the im
 
         return None
 
-    def _save_scenes(self, text: str, out_dir: Path) -> None:
-        scenes = self._repair_json_array(text)
-        if scenes is None:
-            _log.error("Scenes JSON parse failed for text: %s…", text[:200])
-            (out_dir / "scenes.raw").write_text(text, encoding="utf-8")
-            self._notify_stage("scenes", "error", {"error": "Could not parse scenes JSON. Raw output saved."})
-            return
-        out_path = out_dir / "scenes.json"
-        out_path.write_text(json.dumps(scenes, indent=2, ensure_ascii=False), encoding="utf-8")
-        if self._current_session_id:
-            update_session(self._current_session_id, scenes_path=str(out_path))
-        _log.info("Scenes saved → %s (%d scenes)", out_path, len(scenes))
-        self._notify_stage("scenes", "done", {"scenes": scenes})
-
     def _save_timeline(self, text: str, out_dir: Path) -> None:
         timeline = self._repair_json_array(text)
         if timeline is None:
@@ -1997,6 +2193,9 @@ Do NOT include any text, labels, or UI elements in the prompt. Write ONLY the im
             transcript = Path(txt_path).read_text(encoding="utf-8")
         names_str = ", ".join(character_names) if character_names else "Unknown"
         glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
         session_date = getattr(self, '_session_date', '')
         prompt = f"""You are an expert Dungeon Master's assistant. Analyze this D&D session transcript and produce structured DM notes.
 
@@ -2014,7 +2213,7 @@ A concise chronological bullet list of what happened, including location changes
 For each NPC: name, role/description, attitude toward the party, any promises made or threats issued, and current status/location.
 
 ## Items & Loot
-List every item mentioned: who received it, what it does (if known), and any unidentified items. Include gold/currency.
+List EVERY item found, looted, purchased, received, gifted, consumed, or mentioned in the session. For each: who received/used it, what it does (if known), and whether it's identified. Include ALL gold/currency transactions (gained and spent). Be thorough — missing loot is the most common error in DM notes.
 
 ## Character Development
 Notable moments per character: decisions made, personal arcs advanced, relationships changed, any leveling or ability use worth noting.
@@ -2092,15 +2291,29 @@ A concrete to-do list: NPCs to prepare, locations to flesh out, rules to look up
             npc_block = "\n\n## NPCs (only include those who ACTUALLY appear in or are referenced in this session)\n\n" + "\n\n---\n\n".join(npc_parts)
 
         session_date = getattr(self, '_session_date', '')
+        glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
         prompt = """You are a D&D campaign chronicler. For each player character below, write a 2-3 sentence update describing how they developed, what they did, and any notable moments in this session.
 
 Also write updates for any NPCs that ACTUALLY APPEAR or are DIRECTLY REFERENCED in this session's transcript. Skip NPCs that are not mentioned at all.
 
-Return ONLY a valid JSON object (no markdown, no explanation) mapping character/NPC names to their update text:
+Return ONLY a valid JSON object (no markdown, no explanation) mapping character/NPC names to an object with text, confidence (0-100), and reasoning:
 {{
-  "CharacterName": "2-3 sentence development update for this session...",
+  "CharacterName": {{
+    "text": "2-3 sentence development update for this session...",
+    "confidence": 90,
+    "reasoning": "Brief explanation of why this update is accurate"
+  }},
   ...
 }}
+
+Confidence guidelines:
+- 95-100: Directly stated or clearly shown in transcript (character says/does something explicitly)
+- 80-94: Strongly implied by context and dialogue
+- 60-79: Inferred or partially supported by transcript
+- Below 60: Speculative, should be reviewed
 
 Focus on: character growth, key decisions, relationships, combat highlights, role-play moments, new abilities or items used. For NPCs, focus on what they did, how they interacted with the party, and any new information revealed.
 
@@ -2110,27 +2323,55 @@ This session took place on {date}. Extract information ONLY from THIS session's 
 ## Player Characters
 
 {chars}
-{npcs}
+{npcs}{glossary}
 
 ## Session Transcript
-{transcript}""".format(date=session_date, chars=char_block, npcs=npc_block, transcript=transcript)
+{transcript}""".format(date=session_date, chars=char_block, npcs=npc_block, glossary=glossary_ctx, transcript=transcript)
         return self._llm_stream(prompt, "character_updates", max_tokens=4096)
 
     def _save_character_updates(self, text: str, out_dir: Path) -> None:
-        """Parse character updates JSON and save to each character's history."""
+        """Parse character updates JSON and save to each character's history.
+
+        Supports both new format (with confidence/reasoning) and flat string format.
+        Low-confidence updates go through entity review.
+        """
         updates = self._extract_json_object(text)
         if updates is None:
             _log.error("character_updates: no valid JSON object found")
             self._notify_stage("character_updates", "error", {"error": "Could not parse updates"})
             return
 
-        # Save to each character's history
+        # Normalise: support both new {text, confidence, reasoning} and flat string formats
+        updates_with_conf = {}  # type: Dict[str, Dict[str, Any]]
+        flat_updates = {}  # type: Dict[str, str]  # for saving to file
+        for char_name, val in updates.items():
+            if isinstance(val, dict) and "text" in val:
+                updates_with_conf[char_name] = val
+                flat_updates[char_name] = val["text"]
+            else:
+                # Backward compat: flat string
+                updates_with_conf[char_name] = {
+                    "text": str(val),
+                    "confidence": 100,
+                    "reasoning": "Direct format (no confidence provided)",
+                }
+                flat_updates[char_name] = str(val)
+
+        # Split by confidence threshold
+        threshold = self._ENTITY_REVIEW_THRESHOLD
+        auto_apply = {k: v for k, v in updates_with_conf.items() if v.get("confidence", 100) >= threshold}
+        review_queue = {k: v for k, v in updates_with_conf.items() if v.get("confidence", 100) < threshold}
+
+        # Save to file (flat format for backward compat)
+        out_path = out_dir / "character_updates.json"
+        out_path.write_text(json.dumps(flat_updates, indent=2, ensure_ascii=False), encoding="utf-8")
+        if self._current_session_id:
+            update_session(self._current_session_id, character_updates_path=str(out_path))
+
+        # Get session metadata
         chars = _get_characters_by_ids(self._current_character_ids)
         name_to_id = {ch["name"]: ch["id"] for ch in chars}
-        saved_count = 0
         session_id = self._current_session_id or ""
-
-        # Get session metadata for history entry
         session_date = ""
         campaign_name = ""
         season_number = 0
@@ -2143,31 +2384,21 @@ This session took place on {date}. Extract information ONLY from THIS session's 
                     season_number = s.get("season_number", 0)
                     break
 
-        for char_name, update_text in updates.items():
+        npc_name_to_id = {}  # type: Dict[str, str]
+        if self._current_npc_chars:
+            npc_name_to_id = {npc["name"]: npc["id"] for npc in self._current_npc_chars}
+
+        def _apply_update(char_name, update_text):
+            # type: (str, str) -> bool
+            """Apply a single character update to history. Returns True if saved."""
             char_id = name_to_id.get(char_name)
             if not char_id:
-                # Try case-insensitive match
                 for n, cid in name_to_id.items():
                     if n.lower() == char_name.lower():
                         char_id = cid
                         break
-            if char_id and update_text:
-                _add_history_entry(
-                    char_id, session_id, session_date,
-                    campaign_name, season_number, update_text,
-                )
-                saved_count += 1
-
-        # Also save NPC history entries
-        if self._current_npc_chars:
-            npc_name_to_id = {npc["name"]: npc["id"] for npc in self._current_npc_chars}
-            npc_count = 0
-            for char_name, update_text in updates.items():
-                # Skip if already matched as a player character
-                if char_name in name_to_id or any(
-                    n.lower() == char_name.lower() for n in name_to_id
-                ):
-                    continue
+            if not char_id:
+                # Try NPC
                 npc_id = npc_name_to_id.get(char_name)
                 if not npc_id:
                     for n, nid in npc_name_to_id.items():
@@ -2175,24 +2406,61 @@ This session took place on {date}. Extract information ONLY from THIS session's 
                             npc_id = nid
                             break
                 if npc_id and update_text:
-                    _add_history_entry(
-                        npc_id, session_id, session_date,
-                        campaign_name, season_number, update_text,
-                    )
-                    npc_count += 1
-            if npc_count:
-                _log.info("NPC history updates saved for %d NPCs", npc_count)
+                    _add_history_entry(npc_id, session_id, session_date, campaign_name, season_number, update_text)
+                    return True
+                return False
+            if char_id and update_text:
+                _add_history_entry(char_id, session_id, session_date, campaign_name, season_number, update_text)
+                return True
+            return False
 
-        # Also save to file for reference
-        out_path = out_dir / "character_updates.json"
-        out_path.write_text(json.dumps(updates, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Auto-apply high-confidence updates
+        saved_count = 0
+        for char_name, val in auto_apply.items():
+            if _apply_update(char_name, val["text"]):
+                saved_count += 1
 
-        # Track in session registry
-        if self._current_session_id:
-            update_session(self._current_session_id, character_updates_path=str(out_path))
+        # Entity review for low-confidence updates
+        if review_queue:
+            _log.info("Character updates: %d auto-applied, %d need review", len(auto_apply), len(review_queue))
+            review_items = [
+                {
+                    "name": char_name,
+                    "text": val["text"],
+                    "confidence": val.get("confidence", 50),
+                    "reasoning": val.get("reasoning", ""),
+                }
+                for char_name, val in review_queue.items()
+            ]
+            auto_applied_summary = [
+                {"name": k, "action": "update", "confidence": v.get("confidence", 100)}
+                for k, v in auto_apply.items()
+            ]
+            decisions = self._request_entity_review("character_updates", review_items, auto_applied_summary)
+
+            # Apply accepted/edited decisions
+            for d in decisions:
+                action = d.get("action", "decline")
+                if action == "decline":
+                    continue
+                name = d.get("name", "")
+                if action == "edit" and d.get("edited"):
+                    update_text = d["edited"].get("text", "")
+                else:
+                    # Accept: use original proposed text
+                    proposed = d.get("proposed", {})
+                    update_text = proposed.get("text", "")
+                if update_text and name:
+                    if _apply_update(name, update_text):
+                        saved_count += 1
+                    # Update flat file too
+                    flat_updates[name] = update_text
+
+            # Re-save file with any edits applied
+            out_path.write_text(json.dumps(flat_updates, indent=2, ensure_ascii=False), encoding="utf-8")
 
         _log.info("Character updates saved for %d/%d characters", saved_count, len(updates))
-        self._notify_stage("character_updates", "done", {"updates": updates})
+        self._notify_stage("character_updates", "done", {"updates": flat_updates})
 
     def _generate_glossary_streaming(self, txt_path: str, character_names: List[str],
                                       transcript: Optional[str] = None) -> str:
@@ -2252,12 +2520,18 @@ This session took place on {date}. Extract information ONLY from THIS session's 
 - The "keep" term gets the enriched content; the "remove" term will be deleted{existing}
 
 ## Output Format
-Return a JSON object where each key is the term and the value is an object with "category", "definition", and "description":
+Return a JSON object where each key is the term and the value is an object with "category", "definition", "description", "confidence" (0-100), and "reasoning":
 {{
-  "Strahd von Zarovich": {{"category": "NPC", "definition": "Vampire lord ruling over Barovia from Castle Ravenloft.", "description": "Ancient vampire who made a pact with dark powers. Obsessed with Ireena Kolyana. The party first encountered his presence through wolves attacking the village."}},
-  "Vallaki": {{"category": "Location", "definition": "Walled town in Barovia, governed by Baron Vallakovich.", "description": "The party arrived seeking refuge. The Baron enforces mandatory festivals to keep morale up. The Blue Water Inn serves as a hub for travelers."}},
+  "Strahd von Zarovich": {{"category": "NPC", "definition": "Vampire lord ruling over Barovia from Castle Ravenloft.", "description": "Ancient vampire who made a pact with dark powers. Obsessed with Ireena Kolyana.", "confidence": 95, "reasoning": "Named multiple times in dialogue"}},
+  "Vallaki": {{"category": "Location", "definition": "Walled town in Barovia, governed by Baron Vallakovich.", "description": "The party arrived seeking refuge. The Baron enforces mandatory festivals.", "confidence": 85, "reasoning": "Referenced as destination but details are from context"}},
   "_merges": [{{"keep": "Castle Ravenloft", "remove": "Castle R."}}]
 }}
+
+Confidence guidelines:
+- 95-100: Named explicitly and clearly described in transcript
+- 80-94: Named in transcript but details are partly inferred
+- 60-79: Mentioned briefly or inferred from context
+- Below 60: Uncertain — may be misheard or ambiguous
 
 Categories: NPC, Location, Faction, Item, Spell, Other
 
@@ -2288,21 +2562,104 @@ Return ONLY the JSON object. No markdown fences, no explanation.
         for term in list(glossary.keys()):
             info = glossary[term]
             if not isinstance(info, dict):
-                glossary[term] = {"category": "Other", "definition": str(info), "description": ""}
+                glossary[term] = {"category": "Other", "definition": str(info), "description": "", "confidence": 100, "reasoning": ""}
             elif "description" not in info:
                 info["description"] = ""
 
-        # Save to file
+        # Determine which terms are genuinely NEW vs existing enrichments
+        existing_glossary = {}  # type: dict
+        if self._current_campaign_id:
+            try:
+                existing_glossary = _get_glossary(self._current_campaign_id)
+            except Exception:
+                pass
+        existing_lower = {k.lower() for k in existing_glossary}
+
+        threshold = self._ENTITY_REVIEW_THRESHOLD
+        new_low_conf = {}  # type: Dict[str, dict]  # genuinely new terms with low confidence
+        auto_terms = {}  # type: Dict[str, dict]  # terms to auto-apply (existing enrichments + high-conf new)
+
+        for term, info in glossary.items():
+            is_existing = term.lower() in existing_lower
+            conf = info.get("confidence", 100) if isinstance(info, dict) else 100
+            if is_existing:
+                # Existing term enrichment: always auto-apply via smart_merge
+                auto_terms[term] = info
+            elif conf >= threshold:
+                # New term with high confidence: auto-apply
+                auto_terms[term] = info
+            else:
+                # New term with low confidence: needs review
+                new_low_conf[term] = info
+
+        # Strip confidence/reasoning from saved artifact file
+        clean_glossary = {}  # type: Dict[str, dict]
+        for term, info in glossary.items():
+            if isinstance(info, dict):
+                clean_glossary[term] = {k: v for k, v in info.items() if k not in ("confidence", "reasoning")}
+            else:
+                clean_glossary[term] = info
+
+        # Save to file (without confidence/reasoning)
         out_path = out_dir / "glossary.json"
-        out_path.write_text(json.dumps(glossary, indent=2, ensure_ascii=False), encoding="utf-8")
+        out_path.write_text(json.dumps(clean_glossary, indent=2, ensure_ascii=False), encoding="utf-8")
 
         # Update session registry
         if self._current_session_id:
             update_session(self._current_session_id, glossary_path=str(out_path))
 
-        # Smart merge into campaign glossary (adds new + updates enriched definitions)
-        if self._current_campaign_id:
-            _smart_merge_glossary(self._current_campaign_id, glossary)
+        # Smart merge auto-apply terms into campaign glossary
+        if self._current_campaign_id and auto_terms:
+            # Strip confidence before merging
+            merge_terms = {t: {k: v for k, v in info.items() if k not in ("confidence", "reasoning")} for t, info in auto_terms.items()}
+            added, updated = _smart_merge_glossary(self._current_campaign_id, merge_terms)
+            _log.info("Glossary merge result: %d added, %d updated (campaign=%s, auto_terms=%d, review_terms=%d)",
+                      added, updated, self._current_campaign_id, len(auto_terms), len(new_low_conf))
+        elif not self._current_campaign_id:
+            _log.warning("Glossary save: no _current_campaign_id set — skipping merge")
+
+        # Entity review for low-confidence NEW terms
+        if new_low_conf and self._current_campaign_id:
+            _log.info("Glossary: %d new terms need review (threshold=%d%%)", len(new_low_conf), threshold)
+            review_items = [
+                {
+                    "name": term,
+                    "category": info.get("category", "Other"),
+                    "definition": info.get("definition", ""),
+                    "description": info.get("description", ""),
+                    "confidence": info.get("confidence", 50),
+                    "reasoning": info.get("reasoning", ""),
+                }
+                for term, info in new_low_conf.items()
+            ]
+            auto_applied_summary = [
+                {"name": t, "action": "update" if t.lower() in existing_lower else "create", "confidence": info.get("confidence", 100)}
+                for t, info in auto_terms.items()
+            ]
+            decisions = self._request_entity_review("glossary", review_items, auto_applied_summary)
+
+            # Apply accepted/edited glossary terms
+            accepted_terms = {}  # type: Dict[str, dict]
+            for d in decisions:
+                action = d.get("action", "decline")
+                if action == "decline":
+                    continue
+                name = d.get("name", "")
+                if action == "edit" and d.get("edited"):
+                    entry = d["edited"]
+                else:
+                    entry = d.get("proposed", {})
+                if name and entry:
+                    accepted_terms[name] = {
+                        "category": entry.get("category", "Other"),
+                        "definition": entry.get("definition", ""),
+                        "description": entry.get("description", ""),
+                    }
+            if accepted_terms:
+                _smart_merge_glossary(self._current_campaign_id, accepted_terms)
+                # Also add to clean_glossary so NPC sync and entity migration see them
+                clean_glossary.update(accepted_terms)
+                _log.info("Glossary review: %d terms accepted/edited, merged into campaign", len(accepted_terms))
 
         # Apply merge directives (deduplication)
         if merges and isinstance(merges, list) and self._current_campaign_id:
@@ -2313,22 +2670,22 @@ Return ONLY the JSON object. No markdown fences, no explanation.
 
         # Sync NPCs from glossary entries
         if self._current_campaign_id:
-            self._sync_npcs_from_glossary(glossary, self._current_campaign_id)
+            self._sync_npcs_from_glossary(clean_glossary, self._current_campaign_id)
 
         # Migrate glossary terms into entity registry
         if self._current_campaign_id:
             try:
-                count = _migrate_glossary(self._current_campaign_id, glossary)
+                count = _migrate_glossary(self._current_campaign_id, clean_glossary)
                 if count:
                     _log.info("Migrated %d glossary terms to entity registry", count)
             except Exception as e:
                 _log.error("Entity migration from glossary failed: %s", e)
 
-        # Refresh cached glossary context for subsequent stages (scenes, illustration)
+        # Refresh cached glossary context for subsequent stages
         self._glossary_context = self._build_glossary_context()
 
         _log.info("Glossary saved → %s (%d terms)", out_path, len(glossary))
-        self._notify_stage("glossary", "done", {"glossary": glossary})
+        self._notify_stage("glossary", "done", {"glossary": clean_glossary})
 
     def _sync_npcs_from_glossary(self, glossary, campaign_id):
         # type: (dict, str) -> None
@@ -2406,6 +2763,9 @@ Return ONLY the JSON object. No markdown fences, no explanation.
             transcript = Path(txt_path).read_text(encoding="utf-8")
         names_str = ", ".join(character_names) if character_names else "Unknown"
         glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
 
         session_date = getattr(self, '_session_date', '')
         prompt = """You are a D&D combat statistician. Extract combat stats per hero from this session transcript.
@@ -2471,6 +2831,9 @@ Return ONLY a JSON object (no markdown, no explanation):
             transcript = Path(txt_path).read_text(encoding="utf-8")
         names_str = ", ".join(character_names) if character_names else "Unknown"
         glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
 
         session_date = getattr(self, '_session_date', '')
         prompt = """You are a D&D cartographer and world-builder. Extract all locations from this session transcript.
@@ -2627,6 +2990,9 @@ Return ONLY a valid JSON array (no markdown, no explanation):
             transcript = Path(txt_path).read_text(encoding="utf-8")
         names_str = ", ".join(character_names) if character_names else "Unknown"
         glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
 
         session_date = getattr(self, '_session_date', '')
         prompt = """You are a D&D campaign chronicler specializing in NPC documentation. Extract all NPCs encountered or mentioned in this session transcript.
@@ -2736,6 +3102,9 @@ Return ONLY a valid JSON array (no markdown, no explanation):
             transcript = Path(txt_path).read_text(encoding="utf-8")
         names_str = ", ".join(character_names) if character_names else "Unknown"
         glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
         session_date = getattr(self, '_session_date', '')
 
         prompt = """You are a D&D loot tracker. Extract all items acquired and gold/currency transactions from this session transcript.
@@ -2747,7 +3116,9 @@ This session took place on {date}. Extract information ONLY from THIS session's 
 - ONLY include items NEWLY ACQUIRED during THIS session — items that changed hands
 - Do NOT include items characters already had from previous sessions or starting equipment
 - Do NOT include items merely mentioned, discussed, or identified but not actually taken/purchased/received
-- Focus on: looted, bought, found, gifted, crafted, or stolen items
+- Do NOT include items BOUGHT or PURCHASED from merchants/shops (spending money to acquire goods)
+- Do NOT include items SPENT, USED, or CONSUMED during the session (potions drunk, scrolls used, ammunition spent)
+- Only items that represent a NET GAIN to the party's inventory: looted, found, gifted, crafted, or stolen
 - "items" = physical items looted, bought, crafted, gifted, or found
   - "item" = item name
   - "type" = weapon, armor, potion, scroll, wondrous, mundane, etc.
@@ -2891,6 +3262,9 @@ Return ONLY a JSON object (no markdown, no explanation):
             transcript = Path(txt_path).read_text(encoding="utf-8")
         names_str = ", ".join(character_names) if character_names else "Unknown"
         glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
 
         session_date = getattr(self, '_session_date', '')
         prompt = """You are a D&D quest tracker. Extract all quests, missions, and objectives from this session transcript.
@@ -3026,85 +3400,77 @@ Return ONLY a valid JSON array (no markdown, no explanation):
                 properties=props,
             )
 
-    # ── Scenes ────────────────────────────────────────────────────────
-
-    def _generate_scenes_streaming(self, txt_path: str, character_names: List[str],
-                                    transcript: Optional[str] = None) -> str:
-        _log.info("generate_scenes (streaming)  txt=%s", txt_path)
+    def _generate_fact_extraction_streaming(self, txt_path: str, character_names: List[str],
+                                             transcript: Optional[str] = None) -> str:
+        """LLM stage: extract structured facts from the labeled transcript."""
+        _log.info("generate_fact_extraction (streaming)  txt=%s", txt_path)
         if transcript is None:
             transcript = Path(txt_path).read_text(encoding="utf-8")
         names_str = ", ".join(character_names) if character_names else "Unknown"
-
         glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
         session_date = getattr(self, '_session_date', '')
 
-        # Build character visual descriptions for cinematic prompts
-        char_visuals = ""
-        if self._current_character_ids:
-            try:
-                chars = _get_characters_by_ids(self._current_character_ids)
-                visual_parts = []
-                for ch in chars:
-                    desc_parts = [ch["name"]]
-                    if ch.get("race"):
-                        desc_parts.append(ch["race"])
-                    if ch.get("class_name"):
-                        desc_parts.append(ch["class_name"])
-                    bd = ch.get("beyond_data") or {}
-                    appearance = bd.get("appearance") or {}
-                    app_details = []
-                    if appearance.get("hair"):
-                        app_details.append("{} hair".format(appearance["hair"]))
-                    if appearance.get("eyes"):
-                        app_details.append("{} eyes".format(appearance["eyes"]))
-                    if appearance.get("skin"):
-                        app_details.append("{} skin".format(appearance["skin"]))
-                    if appearance.get("height"):
-                        app_details.append(appearance["height"])
-                    if app_details:
-                        desc_parts.append("({})".format(", ".join(app_details)))
-                    equip = bd.get("equipment") or []
-                    if equip:
-                        desc_parts.append("wearing/carrying: {}".format(", ".join(equip[:5])))
-                    visual_parts.append(" — ".join(desc_parts))
-                if visual_parts:
-                    char_visuals = "\n\nCharacter visual references (use these for accurate descriptions):\n" + "\n".join("- " + v for v in visual_parts)
-            except Exception as e:
-                _log.warning("Could not load character visuals for scenes: %s", e)
+        prompt = f"""You are a D&D session analyst. Extract ALL important facts from this session transcript into a structured JSON array.
 
-        prompt = f"""You are a cinematic AI director extracting visually compelling scenes from a D&D session transcript. Your prompts will be used for AI video generation (Veo, Sora, Runway).
+A "fact" is any discrete event, action, dialogue, decision, discovery, or combat moment that matters to the story. Each fact captures WHO did WHAT, WHY, and WHEN.
 
-## Session Context
-This session took place on {session_date}. Extract information ONLY from THIS session's transcript.
+Your ENTIRE response must be a single valid JSON array. No text before or after. No trailing commas.
 
-Identify 6–12 of the most dramatic or visually interesting moments in chronological order. For each, craft a detailed, cinematic video generation prompt.
-
-Return ONLY a valid JSON array (no markdown, no explanation) with this exact structure:
 [
   {{
-    "title": "Short evocative scene title",
-    "description": "1–2 sentence description of what happens in this scene.",
-    "videoPrompt": "Epic fantasy cinematic prompt. 3–5 sentences describing the scene for video generation."
+    "type": "action | dialogue | event | decision | discovery | combat | noise",
+    "who": "Character Name",
+    "what": "Brief description of what happened",
+    "why": "Motivation or context (empty string if unclear)",
+    "when": "Relative timing or context in session (e.g., 'at the start', 'during combat at the bridge')",
+    "speaker": "The speaker label from the transcript who said/narrated this (e.g., 'DM', 'Khuzz')",
+    "segment_indices": [42, 43],
+    "original_text": "The exact transcript lines this fact comes from (include speaker label and timestamp if present)",
+    "confidence": 92,
+    "reasoning": "Why you are confident (or not) about this fact and its speaker attribution"
   }}
 ]
 
-Your ENTIRE response must be a single valid JSON array. No text before or after. No trailing commas. Ensure every string value is properly escaped.
+## Fact Types
+- "action": A character performs a physical or magical action
+- "dialogue": An important conversation or statement
+- "event": Something happens in the world (weather, NPC arrival, etc.)
+- "decision": A character or party makes a meaningful choice
+- "discovery": Finding something, learning something, a reveal
+- "combat": A combat action, attack, spell cast in combat
+- "noise": Non-D&D content (side conversation, break chatter, off-topic). ONLY use this if you are 100% certain this is NOT game content. Include the original text so the DM can verify.
 
-Rules:
-- Focus on cinematic moments: combat, exploration, reveals, confrontations, emotional beats
-- **Always use character names** with brief visual identifiers (e.g. "Aphelios, the silver-haired elven knight, raises his glowing longsword")
-- **Epic fantasy cinematic quality**: rich atmospheric lighting (torchlight, moonlight, magical glow), detailed fantasy environments, dynamic camera angles (low angle for power, aerial for scale, close-up for emotion)
-- Describe environment first, then character actions, then lighting/atmosphere, then camera direction
-- Style: high-budget D&D cinematic, reminiscent of epic fantasy films
-- Be specific about lighting, environment, mood, and visual effects
-- Do not include dialogue in videoPrompt
+## Segment Indices
+The transcript has numbered lines. For each fact, list the line numbers (0-based) of the transcript lines this fact comes from. Count from the top of the transcript — each line that starts with a speaker label like "[DM]" or "[Character]" is a new segment.
+
+## Confidence Scoring
+- 95-100: Speaker attribution is clearly correct, fact is unambiguous from the text
+- 80-94: Fact is likely correct but some ambiguity in speaker or details
+- 60-79: Significant uncertainty — speaker diarization may have merged speakers, or fact is partially inferred
+- below 60: Very uncertain — heavily inferred or speaker attribution likely wrong
+
+**Be critical about speaker attribution.** Audio diarization often bundles multiple speakers into one segment. If a segment contains dialogue that seems to switch speakers mid-sentence, or if the attributed speaker says something inconsistent with their character, lower the confidence and explain why in the reasoning.
+
+## Rules
+- Extract 15-40 facts depending on session length (aim for all important moments)
+- Chronological order
+- **ALWAYS use canonical spellings** from the Characters and Glossary sections below. Audio transcription often misspells proper nouns (e.g., "Marchal" instead of "Warchaal"). Always cross-reference names against the known characters and glossary terms.
+- Include the original transcript text snippet for each fact
+- If the DM is narrating what a character does, the "who" is the character but the "speaker" is "DM"
+- Lower confidence when speaker attribution seems inconsistent with the content
+
+## Session Context
+This session took place on {session_date}. Extract facts ONLY from THIS session's transcript.
 
 ## Characters in This Session
-{names_str}{char_visuals}{glossary_ctx}
+{names_str}{glossary_ctx}
 
-## Session Transcript
+## Transcript
 {transcript}"""
-        return self._llm_stream(prompt, "scenes")
+        return self._llm_stream(prompt, "fact_extraction", max_tokens=8192)
 
     def _generate_timeline_streaming(self, txt_path: str, character_names: List[str],
                                       transcript: Optional[str] = None) -> str:
@@ -3122,6 +3488,9 @@ Rules:
             source_label = "plain text transcript (timestamps may not be available)"
         names_str = ", ".join(character_names) if character_names else "Unknown"
         glossary_ctx = getattr(self, '_glossary_context', '') or self._build_glossary_context()
+        entity_ctx = getattr(self, '_entity_context', '')
+        if entity_ctx:
+            glossary_ctx = glossary_ctx + entity_ctx
         session_date = getattr(self, '_session_date', '')
         prompt = f"""You are a D&D session archivist. Extract the most pivotal, story-defining moments from this session into a structured timeline.
 
@@ -3199,7 +3568,7 @@ A concise chronological bullet list of what happened, including location changes
 For each NPC: name, role/description, attitude toward the party, any promises made or threats issued, and current status/location.
 
 ## Items & Loot
-List every item mentioned: who received it, what it does (if known), and any unidentified items. Include gold/currency.
+List EVERY item found, looted, purchased, received, gifted, consumed, or mentioned in the session. For each: who received/used it, what it does (if known), and whether it's identified. Include ALL gold/currency transactions (gained and spent). Be thorough — missing loot is the most common error in DM notes.
 
 ## Character Development
 Notable moments per character: decisions made, personal arcs advanced, relationships changed, any leveling or ability use worth noting.

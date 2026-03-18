@@ -4,7 +4,9 @@ Characters exist independently of campaigns. Campaigns reference characters by I
 Each character optionally links to a D&D Beyond profile for auto-sync.
 """
 import json
+import os
 import re
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -29,12 +31,36 @@ def _load() -> List[dict]:
     return []
 
 
-def _save(characters: List[dict]) -> None:
+def _save(characters, force=False):
+    # type: (List[dict], bool) -> None
+    """Save characters list with atomic write and empty-data guard."""
     _CHARACTERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _CHARACTERS_FILE.write_text(
+    # Guard: refuse to wipe non-empty data
+    if not characters and not force and _CHARACTERS_FILE.exists():
+        try:
+            existing = _CHARACTERS_FILE.read_text(encoding="utf-8").strip()
+            if len(existing) > 20:  # more than '{"characters": []}'
+                _log.error(
+                    "BLOCKED: attempted to save empty characters over %d bytes of data",
+                    len(existing),
+                )
+                return
+        except Exception:
+            pass
+    # Backup existing file
+    if _CHARACTERS_FILE.exists() and _CHARACTERS_FILE.stat().st_size > 0:
+        bak = _CHARACTERS_FILE.with_suffix(".json.bak")
+        try:
+            shutil.copy2(str(_CHARACTERS_FILE), str(bak))
+        except Exception:
+            pass
+    # Atomic write
+    tmp = _CHARACTERS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(
         json.dumps({"characters": characters}, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    os.replace(str(tmp), str(_CHARACTERS_FILE))
 
 
 def _char_dir(char_id: str) -> Path:
@@ -127,11 +153,10 @@ def delete_character(char_id: str) -> bool:
     before = len(characters)
     characters = [c for c in characters if c["id"] != char_id]
     if len(characters) < before:
-        _save(characters)
+        _save(characters, force=True)
         # Clean up character directory
         char_dir = _CHARACTERS_DIR / char_id
         if char_dir.exists():
-            import shutil
             shutil.rmtree(char_dir, ignore_errors=True)
         _log.info("Deleted character %s", char_id)
         return True
