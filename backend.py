@@ -3306,29 +3306,47 @@ Return ONLY a valid JSON array (no markdown, no explanation):
 ## Session Context
 This session took place on {date}. Extract information ONLY from THIS session's transcript.
 
-## Rules
-- ONLY include items NEWLY ACQUIRED during THIS session — items that changed hands
-- Do NOT include items characters already had from previous sessions or starting equipment
-- Do NOT include items merely mentioned, discussed, or identified but not actually taken/purchased/received
-- Do NOT include items BOUGHT or PURCHASED from merchants/shops (spending money to acquire goods)
-- Do NOT include items SPENT, USED, or CONSUMED during the session (potions drunk, scrolls used, ammunition spent)
-- Only items that represent a NET GAIN to the party's inventory: looted, found, gifted, crafted, or stolen
-- "items" = physical items looted, bought, crafted, gifted, or found
-  - "item" = item name
-  - "type" = weapon, armor, potion, scroll, wondrous, mundane, etc.
-  - "magical" = true/false (only true if explicitly stated as magical)
-  - "looted_by" = character who took/received the item (or "Party" if shared)
-  - "looted_from" = source (enemy name, chest, shop, NPC gift, etc.)
-  - "when" = approximate moment in the session (e.g. "after defeating the ogre")
-  - "where" = location where the item was acquired
-  - "how" = method of acquisition (looted, bought, found, gifted, crafted, stolen)
-- "gold" = currency transactions
-  - "amount" = numeric amount
-  - "currency" = gp, sp, cp, ep, pp
-  - "gained_by" = who received it (character name or "Party")
-  - "source" = where it came from (enemy, quest reward, sale, NPC, etc.)
-  - "context" = brief description of the transaction
-- Only include items/gold explicitly mentioned in the transcript
+## What to Track
+This is a NET GAINS tracker. Only include things the party RECEIVED — never things they spent or lost.
+
+## Items — NET GAINS ONLY
+Include items that a party member RECEIVED during this session:
+- Looted from enemies, chests, or the environment
+- Found or discovered
+- Gifted by NPCs
+- Crafted during the session
+- Purchased from shops (the item is a net gain even though gold was spent)
+- Stolen
+
+Do NOT include:
+- Items the party already had from previous sessions
+- Items merely mentioned, discussed, or identified but not taken
+- Items consumed/used/spent during the session (potions drunk, scrolls used, ammo spent)
+- Items the party LOST, GAVE AWAY, or SOLD
+
+Fields per item:
+- "item" = item name
+- "type" = weapon, armor, potion, scroll, wondrous, mundane, tool, treasure, etc.
+- "magical" = true/false (only true if explicitly stated as magical)
+- "looted_by" = character who took/received the item (or "Party" if shared)
+- "looted_from" = source (enemy name, chest, shop name, NPC gift, etc.)
+- "when" = approximate moment in the session
+- "where" = location where the item was acquired
+- "how" = method: looted, bought, found, gifted, crafted, stolen
+
+## Gold/Currency — NET GAINS ONLY
+Only include gold/currency the party RECEIVED (looted, quest rewards, gifts, found treasure).
+Do NOT include gold SPENT (purchases, bribes, payments, donations, fees, tips).
+Do NOT include gold given TO NPCs. Only gold coming IN to a party member.
+
+Fields per gold entry:
+- "amount" = numeric amount (positive only)
+- "currency" = gp, sp, cp, ep, pp
+- "gained_by" = who received it (character name or "Party")
+- "source" = where it came from (enemy, quest reward, treasure chest, NPC, etc.)
+- "context" = brief description
+
+Only include items/gold explicitly mentioned in the transcript.
 
 ## Characters
 {names}
