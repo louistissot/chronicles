@@ -529,6 +529,16 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
   async function handleGenerate(stage: string) {
     setGeneratingSet(prev => new Set(prev).add(stage))
     setLoadError(null)
+    // Clear stale data so UI immediately reflects reprocessing has started
+    if (stage === 'locations') setLocationsData(null)
+    if (stage === 'loot') setLootData(null)
+    if (stage === 'summary') setSummaryContent(null)
+    if (stage === 'dm_notes') setDmNotesContent(null)
+    if (stage === 'timeline') setTimelineData(null)
+    if (stage === 'glossary') setGlossaryData(null)
+    if (stage === 'npcs') setNpcsData(null)
+    if (stage === 'missions') setMissionsData(null)
+    if (stage === 'leaderboard') setLeaderboardData(null)
     try {
       const result = await api('run_single_stage', session.id, stage)
       if (!result?.ok) {
@@ -1093,13 +1103,17 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
               {!loading && (!locationsData || locationsData.length === 0) && !loadError && !session.files.locations && hasTranscript && !generatingSet.has('locations') && (
                 <GenerateArtifactButton stage="locations" label="Locations" generating={generatingSet} onGenerate={handleGenerate} />
               )}
-              {!loading && locationsData && locationsData.length > 0 && hasTranscript && !generatingSet.has('locations') && (
+              {!loading && locationsData && locationsData.length > 0 && hasTranscript && (
                 <div className="flex justify-center pt-2 pb-1">
                   <button
                     onClick={() => handleGenerate('locations')}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/8 text-[10px] font-heading text-parchment/40 uppercase tracking-wider hover:border-gold/20 hover:text-gold/60 transition-colors"
+                    disabled={generatingSet.has('locations')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/8 text-[10px] font-heading text-parchment/40 uppercase tracking-wider hover:border-gold/20 hover:text-gold/60 transition-colors disabled:opacity-50 disabled:cursor-wait disabled:hover:border-white/8 disabled:hover:text-parchment/40"
                   >
-                    <RefreshCw className="w-3 h-3" />Reprocess Locations
+                    {generatingSet.has('locations')
+                      ? <><Loader2 className="w-3 h-3 animate-spin" />Reprocessing...</>
+                      : <><RefreshCw className="w-3 h-3" />Reprocess Locations</>
+                    }
                   </button>
                 </div>
               )}
@@ -1261,13 +1275,17 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
               {!loading && !lootData && !loadError && !session.files.loot && hasTranscript && !generatingSet.has('loot') && (
                 <GenerateArtifactButton stage="loot" label="Loot" generating={generatingSet} onGenerate={handleGenerate} />
               )}
-              {!loading && lootData && hasTranscript && !generatingSet.has('loot') && (
+              {!loading && lootData && hasTranscript && (
                 <div className="flex justify-center pt-2 pb-1">
                   <button
                     onClick={() => handleGenerate('loot')}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/8 text-[10px] font-heading text-parchment/40 uppercase tracking-wider hover:border-gold/20 hover:text-gold/60 transition-colors"
+                    disabled={generatingSet.has('loot')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/8 text-[10px] font-heading text-parchment/40 uppercase tracking-wider hover:border-gold/20 hover:text-gold/60 transition-colors disabled:opacity-50 disabled:cursor-wait disabled:hover:border-white/8 disabled:hover:text-parchment/40"
                   >
-                    <RefreshCw className="w-3 h-3" />Reprocess Loot
+                    {generatingSet.has('loot')
+                      ? <><Loader2 className="w-3 h-3 animate-spin" />Reprocessing...</>
+                      : <><RefreshCw className="w-3 h-3" />Reprocess Loot</>
+                    }
                   </button>
                 </div>
               )}
