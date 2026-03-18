@@ -16,29 +16,17 @@ import webview  # type: ignore
 
 from campaigns import (
     add_season as _add_season,
-)
-from campaigns import (
+    character_names as _extract_char_names,
+    create_campaign as _create_campaign,
+    delete_campaign as _delete_campaign,
+    get_campaigns as _get_campaigns,
     get_glossary as _get_glossary,
     merge_glossary as _merge_glossary,
     smart_merge_glossary as _smart_merge_glossary,
-    update_glossary as _update_glossary,
-)
-from campaigns import (
-    create_campaign as _create_campaign,
-)
-from campaigns import (
-    delete_campaign as _delete_campaign,
-)
-from campaigns import (
-    get_campaigns as _get_campaigns,
-)
-from campaigns import (
     update_campaign as _update_campaign,
-)
-from campaigns import (
+    update_glossary as _update_glossary,
     update_season as _update_season,
 )
-from campaigns import character_names as _extract_char_names
 from characters import (
     add_history_entry as _add_history_entry,
     create_character as _create_character,
@@ -78,13 +66,12 @@ from postprocess import (
 from runner import TranscriptionJob
 from sessions import (
     create_session_folder,
+    delete_session as _delete_session,
     get_campaign_session_count,
+    get_session_by_id as _get_session_by_id,
     get_sessions,
     register_session,
     update_session,
-)
-from sessions import (
-    delete_session as _delete_session,
 )
 from entities import (
     ensure_migrated as _ensure_entities_migrated,
@@ -98,7 +85,6 @@ from entities import (
     migrate_glossary_to_entities as _migrate_glossary,
     migrate_session_artifacts as _migrate_session_artifacts,
     process_extracted_entities as _process_entities,
-    project_to_glossary as _project_glossary,
     create_entity as _create_entity,
     update_entity as _update_entity,
 )
@@ -706,7 +692,7 @@ end try
         """Re-trigger transcription for an existing session that has audio but no transcript."""
         _log.info("retry_transcription  session_id=%s  model=%s  language=%s", session_id, model, language)
         try:
-            session = next((s for s in get_sessions() if s.get("id") == session_id), None)
+            session = _get_session_by_id(session_id)
             if not session:
                 return {"ok": False, "error": "Session not found"}
 
@@ -1888,10 +1874,9 @@ This session took place on {session_date}. Extract information ONLY from THIS se
         # Look up session date for prompt anchoring
         self._session_date = ""
         if self._current_session_id:
-            for _s in get_sessions():
-                if _s.get("id") == self._current_session_id:
-                    self._session_date = _s.get("date", "")
-                    break
+            _sess = _get_session_by_id(self._current_session_id)
+            if _sess:
+                self._session_date = _sess.get("date", "")
 
         # Ensure entity registry is migrated for this campaign
         if self._current_campaign_id:
@@ -2431,13 +2416,11 @@ This session took place on {date}. Extract information ONLY from THIS session's 
         campaign_name = ""
         season_number = 0
         if session_id:
-            from sessions import get_sessions
-            for s in get_sessions():
-                if s.get("id") == session_id:
-                    session_date = s.get("date", "")
-                    campaign_name = s.get("campaign_name", "")
-                    season_number = s.get("season_number", 0)
-                    break
+            _sess_info = _get_session_by_id(session_id)
+            if _sess_info:
+                session_date = _sess_info.get("date", "")
+                campaign_name = _sess_info.get("campaign_name", "")
+                season_number = _sess_info.get("season_number", 0)
 
         npc_name_to_id = {}  # type: Dict[str, str]
         if self._current_npc_chars:

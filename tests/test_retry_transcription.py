@@ -60,7 +60,7 @@ class TestRetryTranscriptionValidSession:
     def test_calls_start_job_with_correct_audio_path(self, tmp_path):
         api = _make_api()
         session = _make_session(tmp_path)
-        with patch.object(backend, "get_sessions", return_value=[session]), \
+        with patch.object(backend, "_get_session_by_id", return_value=session), \
              patch.object(backend, "_get_campaigns", return_value=[]), \
              patch.object(backend, "get_pref", return_value="large-v2"), \
              patch.object(api, "start_job", return_value={"ok": True}) as mock_start:
@@ -74,7 +74,7 @@ class TestRetryTranscriptionValidSession:
     def test_passes_character_names_to_start_job(self, tmp_path):
         api = _make_api()
         session = _make_session(tmp_path)
-        with patch.object(backend, "get_sessions", return_value=[session]), \
+        with patch.object(backend, "_get_session_by_id", return_value=session), \
              patch.object(backend, "_get_campaigns", return_value=[]), \
              patch.object(backend, "get_pref", return_value="large-v2"), \
              patch.object(api, "start_job", return_value={"ok": True}) as mock_start:
@@ -89,7 +89,7 @@ class TestRetryTranscriptionValidSession:
     def test_num_speakers_matches_character_count(self, tmp_path):
         api = _make_api()
         session = _make_session(tmp_path)
-        with patch.object(backend, "get_sessions", return_value=[session]), \
+        with patch.object(backend, "_get_session_by_id", return_value=session), \
              patch.object(backend, "_get_campaigns", return_value=[]), \
              patch.object(backend, "get_pref", return_value="large-v2"), \
              patch.object(api, "start_job", return_value={"ok": True}) as mock_start:
@@ -102,7 +102,7 @@ class TestRetryTranscriptionValidSession:
     def test_restores_session_context(self, tmp_path):
         api = _make_api()
         session = _make_session(tmp_path)
-        with patch.object(backend, "get_sessions", return_value=[session]), \
+        with patch.object(backend, "_get_session_by_id", return_value=session), \
              patch.object(backend, "_get_campaigns", return_value=[]), \
              patch.object(backend, "get_pref", return_value="large-v2"), \
              patch.object(api, "start_job", return_value={"ok": True}):
@@ -121,7 +121,7 @@ class TestRetryTranscriptionWithParams:
     def test_uses_explicit_model(self, tmp_path):
         api = _make_api()
         session = _make_session(tmp_path)
-        with patch.object(backend, "get_sessions", return_value=[session]), \
+        with patch.object(backend, "_get_session_by_id", return_value=session), \
              patch.object(backend, "_get_campaigns", return_value=[]), \
              patch.object(backend, "get_pref", return_value="large-v2"), \
              patch.object(api, "start_job", return_value={"ok": True}) as mock_start:
@@ -134,7 +134,7 @@ class TestRetryTranscriptionWithParams:
     def test_uses_explicit_language(self, tmp_path):
         api = _make_api()
         session = _make_session(tmp_path)
-        with patch.object(backend, "get_sessions", return_value=[session]), \
+        with patch.object(backend, "_get_session_by_id", return_value=session), \
              patch.object(backend, "_get_campaigns", return_value=[]), \
              patch.object(backend, "get_pref", return_value="large-v2"), \
              patch.object(api, "start_job", return_value={"ok": True}) as mock_start:
@@ -155,7 +155,7 @@ class TestRetryTranscriptionWithParams:
                 return "en"
             return fallback
 
-        with patch.object(backend, "get_sessions", return_value=[session]), \
+        with patch.object(backend, "_get_session_by_id", return_value=session), \
              patch.object(backend, "_get_campaigns", return_value=[]), \
              patch.object(backend, "get_pref", side_effect=mock_get_pref), \
              patch.object(api, "start_job", return_value={"ok": True}) as mock_start:
@@ -174,7 +174,7 @@ class TestRetryTranscriptionWithParams:
 class TestRetryTranscriptionNonexistentSession:
     def test_returns_error(self):
         api = _make_api()
-        with patch.object(backend, "get_sessions", return_value=[]):
+        with patch.object(backend, "_get_session_by_id", return_value=None):
             result = api.retry_transcription("ghost-session-id")
 
         assert result["ok"] is False
@@ -182,7 +182,7 @@ class TestRetryTranscriptionNonexistentSession:
 
     def test_does_not_call_start_job(self):
         api = _make_api()
-        with patch.object(backend, "get_sessions", return_value=[]), \
+        with patch.object(backend, "_get_session_by_id", return_value=None), \
              patch.object(api, "start_job") as mock_start:
             api.retry_transcription("ghost-session-id")
 
@@ -197,7 +197,7 @@ class TestRetryTranscriptionNoAudio:
     def test_missing_audio_path_returns_error(self, tmp_path):
         api = _make_api()
         session = _make_session(tmp_path, audio=False)
-        with patch.object(backend, "get_sessions", return_value=[session]):
+        with patch.object(backend, "_get_session_by_id", return_value=session):
             result = api.retry_transcription("sess-001")
 
         assert result["ok"] is False
@@ -207,7 +207,7 @@ class TestRetryTranscriptionNoAudio:
         api = _make_api()
         session = _make_session(tmp_path, audio=False)
         session["audio_path"] = str(tmp_path / "deleted_recording.m4a")
-        with patch.object(backend, "get_sessions", return_value=[session]):
+        with patch.object(backend, "_get_session_by_id", return_value=session):
             result = api.retry_transcription("sess-001")
 
         assert result["ok"] is False
@@ -216,7 +216,7 @@ class TestRetryTranscriptionNoAudio:
     def test_does_not_call_start_job(self, tmp_path):
         api = _make_api()
         session = _make_session(tmp_path, audio=False)
-        with patch.object(backend, "get_sessions", return_value=[session]), \
+        with patch.object(backend, "_get_session_by_id", return_value=session), \
              patch.object(api, "start_job") as mock_start:
             api.retry_transcription("sess-001")
 

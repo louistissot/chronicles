@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, memo } from 'react'
 import {
   ArrowLeft, Check, ChevronDown, ChevronRight, ExternalLink, ImageIcon,
   Loader2, Pencil, Plus, RefreshCw, Scroll, Search, Shield, Sparkles, Sword, Trash2,
@@ -16,7 +16,7 @@ import { RichTextEditor } from '@/components/RichTextEditor'
 
 // ── Character Card (list view) ───────────────────────────────────────────────
 
-function CharacterCard({
+const CharacterCard = memo(function CharacterCard({
   character,
   campaigns,
   onClick,
@@ -96,7 +96,7 @@ function CharacterCard({
       </div>
     </button>
   )
-}
+})
 
 // ── Create Character Form ────────────────────────────────────────────────────
 
@@ -1063,37 +1063,37 @@ export function CharactersTab({ focusCharacterId, onFocusHandled }: { focusChara
     setSelectedChar(null)
   }
 
-  // Filter + sort
-  const filtered = characters.filter(c => {
-    // Type filter
-    if (typeFilter === 'heroes' && c.is_npc) return false
-    if (typeFilter === 'npcs' && !c.is_npc) return false
-    // Search
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase()
-      return (
-        c.name?.toLowerCase().includes(q) ||
-        c.race?.toLowerCase().includes(q) ||
-        c.class_name?.toLowerCase().includes(q) ||
-        c.specialty?.toLowerCase().includes(q) ||
-        c.npc_description?.toLowerCase().includes(q) ||
-        false
-      )
+  // Filter + sort (memoized to avoid recomputing on unrelated re-renders)
+  const { heroes, npcs } = useMemo(() => {
+    const filtered = characters.filter(c => {
+      if (typeFilter === 'heroes' && c.is_npc) return false
+      if (typeFilter === 'npcs' && !c.is_npc) return false
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase()
+        return (
+          c.name?.toLowerCase().includes(q) ||
+          c.race?.toLowerCase().includes(q) ||
+          c.class_name?.toLowerCase().includes(q) ||
+          c.specialty?.toLowerCase().includes(q) ||
+          c.npc_description?.toLowerCase().includes(q) ||
+          false
+        )
+      }
+      return true
+    }).sort((a, b) => {
+      switch (sortOrder) {
+        case 'name-asc': return (a.name || '').localeCompare(b.name || '')
+        case 'name-desc': return (b.name || '').localeCompare(a.name || '')
+        case 'level-asc': return (a.level || 0) - (b.level || 0)
+        case 'level-desc': return (b.level || 0) - (a.level || 0)
+        default: return 0
+      }
+    })
+    return {
+      heroes: filtered.filter(c => !c.is_npc),
+      npcs: filtered.filter(c => c.is_npc),
     }
-    return true
-  }).sort((a, b) => {
-    switch (sortOrder) {
-      case 'name-asc': return (a.name || '').localeCompare(b.name || '')
-      case 'name-desc': return (b.name || '').localeCompare(a.name || '')
-      case 'level-asc': return (a.level || 0) - (b.level || 0)
-      case 'level-desc': return (b.level || 0) - (a.level || 0)
-      default: return 0
-    }
-  })
-
-  // Split filtered results into heroes and NPCs
-  const heroes = filtered.filter(c => !c.is_npc)
-  const npcs = filtered.filter(c => c.is_npc)
+  }, [characters, typeFilter, searchQuery, sortOrder])
 
   if (selectedChar) {
     return (

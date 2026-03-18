@@ -156,6 +156,15 @@ def get_sessions() -> list:
     return list(reversed(_load()))
 
 
+def get_session_by_id(session_id):
+    # type: (str) -> Optional[dict]
+    """Return a single session by ID, or None if not found. Single disk read."""
+    for s in _load():
+        if s.get("id") == session_id:
+            return s
+    return None
+
+
 def get_campaign_session_count(campaign_id: str) -> int:
     """Count completed sessions for a campaign (those with a txt_path)."""
     sessions = _load()
