@@ -88,6 +88,11 @@ from entities import (
     create_entity as _create_entity,
     update_entity as _update_entity,
 )
+from maps import (
+    load_map as _load_map,
+    save_map as _save_map,
+    update_node_positions as _update_node_positions,
+)
 
 _log = get_logger("backend")
 
@@ -4008,8 +4013,7 @@ Rules:
 
     def get_campaign_map(self, campaign_id: str) -> dict:
         """Return saved map layout, or null if not generated yet."""
-        from maps import load_map
-        data = load_map(campaign_id)
+        data = _load_map(campaign_id)
         return {"ok": True, "map": data}
 
     def generate_campaign_map(self, campaign_id: str) -> dict:
@@ -4126,8 +4130,7 @@ Return ONLY the JSON. No markdown fences, no explanation.""".format(locations=lo
             map_data["generated_at"] = datetime.now().isoformat()
 
             # Save
-            from maps import save_map
-            save_map(campaign_id, map_data)
+            _save_map(campaign_id, map_data)
 
             _log.info("generate_campaign_map: %d nodes, %d edges, %d planes",
                        len(map_data["nodes"]), len(map_data["edges"]), len(map_data["planes"]))
@@ -4138,8 +4141,7 @@ Return ONLY the JSON. No markdown fences, no explanation.""".format(locations=lo
 
     def update_map_positions(self, campaign_id: str, positions: dict) -> dict:
         """Persist manual node position changes."""
-        from maps import update_node_positions
-        ok = update_node_positions(campaign_id, positions)
+        ok = _update_node_positions(campaign_id, positions)
         return {"ok": ok}
 
     def get_location_events(self, campaign_id: str, location_name: str) -> dict:
