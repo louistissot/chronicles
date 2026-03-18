@@ -35,7 +35,11 @@ backend.py       API class exposed to JS. Full pipeline: transcription → speak
 image_gen.py     Gemini image generation (gemini-2.5-flash-image). Three functions:
                  generate_illustration() (16:9, fantasy wrapper), generate_portrait() (1:1), generate_fullbody() (2:3).
 characters.py    Global character registry (~/.config/dnd-whisperx/characters.json). CRUD, history, D&D Beyond sync.
-                 is_dm=True chars hidden from UI, auto-included in speaker mapping. NPC support (is_npc, campaign_ids).
+                 is_dm=True chars hidden from UI, auto-included in speaker mapping.
+                 Enriched NPC support: is_npc, campaign_ids, npc_race, npc_role, npc_attitude,
+                 npc_current_status, npc_session_history. enrich_npc() merges rich session data.
+maps.py          Campaign map persistence (~/.config/dnd-whisperx/maps/<campaign_id>.json).
+                 Stores LLM-generated node positions, edges, planes. Atomic writes + backup.
 beyond.py        D&D Beyond data fetching. Parses classes/races/stats/spells/equipment. ValueError on 403 (private).
 sessions.py      Session registry (~/.config/dnd-whisperx/sessions.json). Atomic writes + backup + empty-write guard.
 campaigns.py     Campaign + season registry. Seasons store character UUIDs referencing characters.json.
@@ -68,8 +72,8 @@ All run in a background thread. `_notify_stage(stage, status, data)` pushes even
 [10] character_updates ────── LLM: per-character + NPC development updates
 [11] glossary ─────────────── LLM: extracts terms → smart-merges into campaign glossary → NPC sync
 [12] leaderboard ──────────── LLM: per-hero combat stats
-[13] locations ────────────── LLM: locations with descriptions, connections
-[14] npcs ─────────────────── LLM: session NPC list with attitudes
+[13] locations ────────────── LLM: locations with descriptions, connections, region_type, location_type
+[14] npcs ─────────────────── LLM: session NPC list with attitudes → auto-syncs to character registry
 [15] loot ─────────────────── LLM: items looted + gold transactions
 [16] missions ─────────────── LLM: quests started/continued/completed
 [17] illustration ─────────── LLM prompt → Gemini image generation
@@ -97,9 +101,30 @@ Review UI: confidence %, evidence text, sample lines per speaker. Color-coded: g
 
 Entity stages include confidence scoring. Threshold: 95% for entity stages, 90% for glossary/character_updates. High-confidence auto-applied; low-confidence triggers `needs_review` pause with `EntityReviewPanel`. DM reviews each card: Accept/Edit/Decline. `complete_entity_review(stage, decisions)` resumes pipeline. `stop_pipeline()` sets all pending events to prevent zombie threads.
 
-### Campaign Glossary
+### Campaign Glossary — Data Deduplication
 
-Stored on each campaign: `{term: {category, definition, description}}`. CRUD: `get_glossary()`, `update_glossary()`, `smart_merge_glossary()`, `apply_glossary_merges()`. NPC sync: `_sync_npcs_from_glossary()` auto-creates NPC characters from NPC glossary entries.
+Glossary stores only Faction, Item, Spell, Other entries. **NPC and Location entries are routed to dedicated registries:**
+- `_save_glossary()` splits by category: NPC → `_sync_npcs_from_glossary()`, Location → entity registry, rest → glossary
+- `get_campaign_glossary()` filters out any lingering NPC/Location entries
+- `_build_glossary_context()` augments LLM context with NPC names (from `characters.json`) and location names (from entity registry)
+- Transcript correction also sources NPC/location names from their registries
+- `rebuild_campaign_glossary()` does a full rebuild: clears glossary, merges session files (excluding NPC/Location), syncs NPCs from session `npcs.json` data
+
+### NPC Enrichment from Session Data
+
+`_sync_npcs_from_session_data()` runs after `_save_npcs()`. For each NPC in session npcs.json:
+- Find/create NPC character in `characters.json` (case-insensitive name match)
+- `enrich_npc()`: keeps longest description, updates race/role if richer, latest attitude/status always wins, appends to `npc_session_history`
+- Enriched NPC fields: `npc_race`, `npc_role`, `npc_attitude`, `npc_current_status`, `npc_session_history`
+
+### Campaign Map
+
+`maps.py` stores LLM-generated map layouts per campaign. `generate_campaign_map()` (on-demand, blocking `call_llm`) takes all deduplicated locations and produces:
+- **nodes**: `{name, x, y, plane, region_type, location_type}` on a 1000x1000 grid
+- **edges**: `{from, to, label, travel_type}` — walk/ride/sail/fly/teleport/portal/underground/swim/climb/other
+- **planes**: separate coordinate spaces (Material Plane, Feywild, etc.)
+
+`update_map_positions()` persists manual node drag without regeneration. `get_location_events()` scans session artifacts for per-session events at a location.
 
 ### Optional Artifacts & Single-Stage Generation
 
@@ -124,7 +149,7 @@ API: `get_entities`, `get_entity_detail`, `get_entity_relationships`, `get_entit
 
 ## Persistent Storage
 
-All under `~/.config/dnd-whisperx/`: `prefs.json`, `sessions.json`, `campaigns.json`, `characters.json`, `characters/<id>/`, `entities/<id>.json`, `digests/<cid>_<sid>.json`, `app.log`.
+All under `~/.config/dnd-whisperx/`: `prefs.json`, `sessions.json`, `campaigns.json`, `characters.json`, `characters/<id>/`, `entities/<id>.json`, `maps/<id>.json`, `digests/<cid>_<sid>.json`, `app.log`.
 
 Session outputs: `~/Documents/Chronicles/<Campaign>/Season N/<YYYY-MM-DD_HH-MM>/`.
 

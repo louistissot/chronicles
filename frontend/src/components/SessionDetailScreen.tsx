@@ -10,7 +10,7 @@ import {
   Mic, FileText, FileJson, ScrollText, Clock, Clapperboard,
   FolderOpen, AlertCircle, BookOpen, Wand2, Image, Users,
   Search, Compass, Sparkles, Gem, Trophy,
-  Settings2, Download, Scroll,
+  Settings2, Download, Scroll, RefreshCw,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -1093,6 +1093,16 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
               {!loading && (!locationsData || locationsData.length === 0) && !loadError && !session.files.locations && hasTranscript && !generatingSet.has('locations') && (
                 <GenerateArtifactButton stage="locations" label="Locations" generating={generatingSet} onGenerate={handleGenerate} />
               )}
+              {!loading && locationsData && locationsData.length > 0 && hasTranscript && !generatingSet.has('locations') && (
+                <div className="flex justify-center pt-2 pb-1">
+                  <button
+                    onClick={() => handleGenerate('locations')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/8 text-[10px] font-heading text-parchment/40 uppercase tracking-wider hover:border-gold/20 hover:text-gold/60 transition-colors"
+                  >
+                    <RefreshCw className="w-3 h-3" />Reprocess Locations
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -1250,6 +1260,16 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
               )}
               {!loading && !lootData && !loadError && !session.files.loot && hasTranscript && !generatingSet.has('loot') && (
                 <GenerateArtifactButton stage="loot" label="Loot" generating={generatingSet} onGenerate={handleGenerate} />
+              )}
+              {!loading && lootData && hasTranscript && !generatingSet.has('loot') && (
+                <div className="flex justify-center pt-2 pb-1">
+                  <button
+                    onClick={() => handleGenerate('loot')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/8 text-[10px] font-heading text-parchment/40 uppercase tracking-wider hover:border-gold/20 hover:text-gold/60 transition-colors"
+                  >
+                    <RefreshCw className="w-3 h-3" />Reprocess Loot
+                  </button>
+                </div>
               )}
             </div>
           )}

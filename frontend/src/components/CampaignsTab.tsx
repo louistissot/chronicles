@@ -416,7 +416,7 @@ function CampaignCard({
 
 // ── Glossary Section ─────────────────────────────────────────────────────────
 
-const GLOSSARY_CATEGORIES = ['NPC', 'Location', 'Faction', 'Item', 'Spell', 'Other']
+const GLOSSARY_CATEGORIES = ['Faction', 'Item', 'Spell', 'Other']
 
 function GlossarySection({ campaignId }: { campaignId: string }) {
   const [expanded, setExpanded] = useState(false)

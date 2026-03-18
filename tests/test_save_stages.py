@@ -118,7 +118,7 @@ class TestSaveGlossaryConfidence:
     def test_high_confidence_terms_auto_merge(self, tmp_path):
         api = _make_api()
         terms = {
-            "Strahd": {"category": "NPC", "definition": "Vampire", "description": "", "confidence": 98, "reasoning": "Named explicitly"},
+            "Order of the Gauntlet": {"category": "Faction", "definition": "Holy knights", "description": "", "confidence": 98, "reasoning": "Named explicitly"},
         }
         text = self._make_glossary_text(terms)
 
@@ -138,12 +138,12 @@ class TestSaveGlossaryConfidence:
     def test_low_confidence_new_terms_trigger_review(self, tmp_path):
         api = _make_api()
         terms = {
-            "Zarovich": {"category": "NPC", "definition": "Unknown", "description": "", "confidence": 60, "reasoning": "Mentioned once"},
+            "Zhentarim": {"category": "Faction", "definition": "Shadow network", "description": "", "confidence": 60, "reasoning": "Mentioned once"},
         }
         text = self._make_glossary_text(terms)
 
         review_decisions = [
-            {"action": "accept", "name": "Zarovich", "proposed": {"category": "NPC", "definition": "Unknown", "description": ""}}
+            {"action": "accept", "name": "Zhentarim", "proposed": {"category": "Faction", "definition": "Shadow network", "description": ""}}
         ]
 
         with patch.object(backend, "_get_glossary", return_value={}), \

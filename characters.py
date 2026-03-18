@@ -507,9 +507,10 @@ def delete_fullbody(char_id, fullbody_path):
 # NPC helpers
 # ---------------------------------------------------------------------------
 
-def create_npc(name, description="", campaign_id=""):
-    # type: (str, str, str) -> dict
-    """Create an NPC character. Returns the new character dict."""
+def create_npc(name, description="", campaign_id="", race="", role="",
+               attitude="", current_status=""):
+    # type: (str, str, str, str, str, str, str) -> dict
+    """Create an NPC character with optional enriched fields. Returns the new character dict."""
     char = create_character(name=name)
     # Set NPC-specific fields
     characters = _load()
@@ -518,6 +519,11 @@ def create_npc(name, description="", campaign_id=""):
             c["is_npc"] = True
             c["npc_description"] = description
             c["campaign_ids"] = [campaign_id] if campaign_id else []
+            c["npc_race"] = race
+            c["npc_role"] = role
+            c["npc_attitude"] = attitude
+            c["npc_current_status"] = current_status
+            c["npc_session_history"] = []
             _save(characters)
             _log.info("Created NPC '%s' (id=%s)", name, char["id"])
             return c
@@ -547,6 +553,59 @@ def find_npc_by_name(name, campaign_id=None):
     for c in get_npcs(campaign_id):
         if c.get("name", "").lower().strip() == name_lower:
             return c
+    return None
+
+
+def enrich_npc(char_id, session_id="", session_date="", race="", role="",
+               description="", attitude="", actions="", current_status="",
+               campaign_id=""):
+    # type: (str, str, str, str, str, str, str, str, str, str) -> Optional[dict]
+    """Enrich an existing NPC with rich session data.
+
+    - Keeps longest npc_description
+    - Updates npc_race/npc_role if new value is longer
+    - Always updates npc_attitude and npc_current_status (latest session wins)
+    - Appends session snapshot to npc_session_history
+    - Adds campaign_id to campaign_ids if not already there
+    """
+    characters = _load()
+    for c in characters:
+        if c["id"] != char_id:
+            continue
+        # Description: keep the longest
+        if description and len(description) > len(c.get("npc_description", "")):
+            c["npc_description"] = description
+        # Race/role: keep the longest (richer)
+        if race and len(race) > len(c.get("npc_race", "")):
+            c["npc_race"] = race
+        if role and len(role) > len(c.get("npc_role", "")):
+            c["npc_role"] = role
+        # Attitude + status: latest session always wins
+        if attitude:
+            c["npc_attitude"] = attitude
+        if current_status:
+            c["npc_current_status"] = current_status
+        # Campaign linkage
+        if campaign_id:
+            cids = c.get("campaign_ids", [])
+            if campaign_id not in cids:
+                cids.append(campaign_id)
+                c["campaign_ids"] = cids
+        # Session history: append snapshot (avoid duplicates by session_id)
+        history = c.get("npc_session_history", [])
+        existing_ids = {h.get("session_id") for h in history}
+        if session_id and session_id not in existing_ids:
+            history.append({
+                "session_id": session_id,
+                "session_date": session_date,
+                "actions": actions,
+                "status": current_status,
+                "attitude": attitude,
+            })
+            c["npc_session_history"] = history
+        _save(characters)
+        _log.info("Enriched NPC '%s' (id=%s) from session %s", c.get("name"), char_id, session_id)
+        return c
     return None
 
 
@@ -600,6 +659,22 @@ def _migrate_npc_fields() -> None:
             changed = True
         if "campaign_ids" not in c:
             c["campaign_ids"] = []
+            changed = True
+        # Enriched NPC fields (v2)
+        if "npc_race" not in c:
+            c["npc_race"] = ""
+            changed = True
+        if "npc_role" not in c:
+            c["npc_role"] = ""
+            changed = True
+        if "npc_attitude" not in c:
+            c["npc_attitude"] = ""
+            changed = True
+        if "npc_current_status" not in c:
+            c["npc_current_status"] = ""
+            changed = True
+        if "npc_session_history" not in c:
+            c["npc_session_history"] = []
             changed = True
     if changed:
         _save(characters)
