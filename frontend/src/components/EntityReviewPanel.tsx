@@ -207,6 +207,7 @@ export function EntityReviewPanel({
               key={card.id}
               card={card}
               state={state}
+              characterNames={payload.character_names || []}
               onDecision={(d) => setDecision(card.id, d)}
               onEditField={(field, value) => updateEditField(card.id, field, value)}
               onConfirmEdit={() => {
@@ -240,15 +241,19 @@ export function EntityReviewPanel({
   )
 }
 
+const DROPDOWN_FIELDS = new Set(['looted_by', 'gained_by', 'looted_from', 'given_by', 'given_to', 'assigned_to'])
+
 function ReviewCard({
   card,
   state,
+  characterNames,
   onDecision,
   onEditField,
   onConfirmEdit,
 }: {
   card: EntityReviewCard
   state: CardState
+  characterNames: string[]
   onDecision: (d: Decision) => void
   onEditField: (field: string, value: any) => void
   onConfirmEdit: () => void
@@ -266,7 +271,7 @@ function ReviewCard({
       isCollapsed ? 'px-4 py-2' : 'px-4 py-3',
     )}>
       {/* Card header */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm font-heading text-parchment/80">{card.name}</span>
         <span className={cn(
           'text-[10px] font-body px-1.5 py-0.5 rounded border',
@@ -334,7 +339,7 @@ function ReviewCard({
               .map(([field, value]) => (
                 <div key={field} className="text-[11px] font-body">
                   <span className="text-parchment/40 font-heading uppercase text-[9px] tracking-wider">{field}: </span>
-                  <span className="text-parchment/60">
+                  <span className="text-parchment/60 break-words">
                     {typeof value === 'object' ? JSON.stringify(value) : String(value)}
                   </span>
                 </div>
@@ -352,12 +357,26 @@ function ReviewCard({
                   <label className="text-[9px] font-heading text-parchment/40 uppercase tracking-wider block mb-0.5">
                     {field}
                   </label>
-                  {typeof value === 'string' && value.length > 80 ? (
+                  {DROPDOWN_FIELDS.has(field) && characterNames.length > 0 ? (
+                    <select
+                      value={String(value ?? '')}
+                      onChange={e => onEditField(field, e.target.value)}
+                      className="w-full bg-void/60 border border-white/10 rounded px-2 py-1 text-[11px] text-parchment/60 outline-none focus:border-gold/40"
+                      style={{ colorScheme: 'dark' }}
+                    >
+                      <option value="">—</option>
+                      {characterNames.map(n => <option key={n} value={n}>{n}</option>)}
+                      {/* Keep current value if not in list */}
+                      {value && !characterNames.includes(String(value)) && (
+                        <option value={String(value)}>{String(value)}</option>
+                      )}
+                    </select>
+                  ) : typeof value === 'string' && value.length > 80 ? (
                     <textarea
                       value={String(value)}
                       onChange={e => onEditField(field, e.target.value)}
-                      className="w-full bg-void/60 border border-white/10 rounded px-2 py-1.5 text-[11px] text-parchment/60 outline-none focus:border-gold/40 resize-y min-h-[40px]"
-                      rows={2}
+                      className="w-full bg-void/60 border border-white/10 rounded px-2 py-1.5 text-[11px] text-parchment/60 outline-none focus:border-gold/40 resize-y min-h-[60px]"
+                      rows={Math.min(6, Math.max(2, Math.ceil(String(value).length / 80)))}
                     />
                   ) : typeof value === 'boolean' ? (
                     <button
@@ -375,8 +394,8 @@ function ReviewCard({
                       onChange={e => {
                         try { onEditField(field, JSON.parse(e.target.value)) } catch { /* invalid JSON, keep text */ }
                       }}
-                      className="w-full bg-void/60 border border-white/10 rounded px-2 py-1.5 text-[11px] text-parchment/60 font-mono outline-none focus:border-gold/40 resize-y min-h-[40px]"
-                      rows={2}
+                      className="w-full bg-void/60 border border-white/10 rounded px-2 py-1.5 text-[11px] text-parchment/60 font-mono outline-none focus:border-gold/40 resize-y min-h-[60px]"
+                      rows={3}
                     />
                   ) : (
                     <input

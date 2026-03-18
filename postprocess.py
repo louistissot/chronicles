@@ -242,6 +242,50 @@ def save_all(
     return txt_path, srt_path
 
 
+def apply_fact_corrections(
+    json_path,      # type: Union[str, Path]
+    mapping,         # type: Dict[str, str]
+    corrections,     # type: List[dict]
+    output_dir,      # type: Union[str, Path]
+):
+    # type: (...) -> Tuple[Optional[Path], Optional[Path]]
+    """Apply speaker/text corrections from fact review and regenerate transcript files.
+
+    corrections: list of {segment_indices: [int], corrected_speaker?: str, corrected_text?: str}
+
+    Works by modifying the mapped WhisperX JSON segments, then re-writing .txt and .srt.
+    Returns (txt_path, srt_path).
+    """
+    import copy
+
+    json_path = Path(json_path)
+    output_dir = Path(output_dir)
+    data = load_json(json_path)
+    mapped = apply_mapping(data, mapping)
+    segments = mapped.get("segments", [])
+
+    for corr in corrections:
+        indices = corr.get("segment_indices", [])
+        new_speaker = corr.get("corrected_speaker")
+        new_text = corr.get("corrected_text")
+        for idx in indices:
+            if 0 <= idx < len(segments):
+                if new_speaker:
+                    segments[idx]["speaker"] = new_speaker
+                if new_text and len(indices) == 1:
+                    # Only replace text if correction applies to a single segment
+                    segments[idx]["text"] = new_text
+
+    stem = json_path.stem
+    txt_path = output_dir / f"{stem}_transcript.txt"
+    write_transcript(mapped, txt_path)
+
+    srt_path = output_dir / f"{stem}_transcript.srt"
+    write_srt(mapped, srt_path)
+
+    return txt_path, srt_path
+
+
 def correct_transcript_terms(data, glossary_terms, character_names):
     # type: (dict, List[str], List[str]) -> Tuple[dict, Dict[str, str]]
     """Correct misspelled proper nouns in WhisperX transcript using glossary + character names.
@@ -264,7 +308,14 @@ def correct_transcript_terms(data, glossary_terms, character_names):
     # Build the combined term list (unique, case-preserved)
     all_terms = []  # type: List[str]
     seen_lower = set()  # type: set
-    for t in list(glossary_terms) + list(character_names):
+    char_name_lower = set()  # type: set
+    for t in list(character_names):
+        t = t.strip()
+        if t and t.lower() not in seen_lower:
+            all_terms.append(t)
+            seen_lower.add(t.lower())
+            char_name_lower.add(t.lower())
+    for t in list(glossary_terms):
         t = t.strip()
         if t and t.lower() not in seen_lower:
             all_terms.append(t)
@@ -308,6 +359,7 @@ def correct_transcript_terms(data, glossary_terms, character_names):
 
     MIN_TERM_LEN = 4
     THRESHOLD = 0.80
+    CHAR_THRESHOLD = 0.70  # Lower threshold for character names (most important to correct)
 
     corrections = {}  # type: Dict[str, str]
     out = copy.deepcopy(data)
@@ -333,7 +385,8 @@ def correct_transcript_terms(data, glossary_terms, character_names):
                 if candidate.lower() == term.lower():
                     continue
                 ratio = SequenceMatcher(None, candidate.lower(), term.lower()).ratio()
-                if ratio >= THRESHOLD:
+                effective_threshold = CHAR_THRESHOLD if term.lower() in char_name_lower else THRESHOLD
+                if ratio >= effective_threshold:
                     # Replace in text preserving surrounding context
                     text = text.replace(candidate, term, 1)
                     corrections[candidate] = term
@@ -366,7 +419,9 @@ def correct_transcript_terms(data, glossary_terms, character_names):
                 if len(term) < MIN_TERM_LEN:
                     continue
                 ratio = SequenceMatcher(None, stripped.lower(), term.lower()).ratio()
-                if ratio >= THRESHOLD:
+                # Use lower threshold for character names (most important to get right)
+                effective_threshold = CHAR_THRESHOLD if term.lower() in char_name_lower else THRESHOLD
+                if ratio >= effective_threshold:
                     match_count += 1
                     if ratio > best_ratio:
                         best_ratio = ratio

@@ -5,9 +5,11 @@ Seasons store character IDs referencing the global character registry
 auto-migrated on load.
 """
 import json
+import os
+import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from log import get_logger
 
@@ -105,9 +107,34 @@ def _load() -> dict:
     return {"campaigns": []}
 
 
-def _save(data: dict) -> None:
+def _save(data, force=False):
+    # type: (dict, bool) -> None
+    """Save campaigns data with atomic write and empty-data guard."""
     _CAMPAIGNS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _CAMPAIGNS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Guard: refuse to wipe non-empty data
+    campaigns_list = data.get("campaigns", [])
+    if not campaigns_list and not force and _CAMPAIGNS_FILE.exists():
+        try:
+            existing = _CAMPAIGNS_FILE.read_text(encoding="utf-8").strip()
+            if len(existing) > 20:  # more than '{"campaigns": []}'
+                _log.error(
+                    "BLOCKED: attempted to save empty campaigns over %d bytes of data",
+                    len(existing),
+                )
+                return
+        except Exception:
+            pass
+    # Backup existing file
+    if _CAMPAIGNS_FILE.exists() and _CAMPAIGNS_FILE.stat().st_size > 0:
+        bak = _CAMPAIGNS_FILE.with_suffix(".json.bak")
+        try:
+            shutil.copy2(str(_CAMPAIGNS_FILE), str(bak))
+        except Exception:
+            pass
+    # Atomic write
+    tmp = _CAMPAIGNS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(str(tmp), str(_CAMPAIGNS_FILE))
 
 
 def get_campaigns() -> List[dict]:
@@ -211,7 +238,7 @@ def delete_campaign(campaign_id: str) -> bool:
     before = len(data["campaigns"])
     data["campaigns"] = [c for c in data["campaigns"] if c["id"] != campaign_id]
     if len(data["campaigns"]) < before:
-        _save(data)
+        _save(data, force=True)
         _log.info("Deleted campaign %s", campaign_id)
         return True
     return False
@@ -265,7 +292,7 @@ def merge_glossary(campaign_id, new_terms):
 
 
 def smart_merge_glossary(campaign_id, new_terms):
-    # type: (str, Dict[str, Dict[str, str]]) -> bool
+    # type: (str, Dict[str, Dict[str, str]]) -> Tuple[int, int]
     """Smart merge: adds new terms AND updates existing terms with enriched definitions.
 
     Case-insensitive matching: if a term matches an existing one (ignoring case),
@@ -308,9 +335,9 @@ def smart_merge_glossary(campaign_id, new_terms):
             _save(data)
             _log.info("Smart-merged glossary for campaign '%s': %d new, %d updated, %d total",
                       c["name"], added, updated, len(existing))
-            return True
+            return (added, updated)
     _log.error("smart_merge_glossary: campaign %s not found", campaign_id)
-    return False
+    return (0, 0)
 
 
 def apply_glossary_merges(campaign_id, merges):

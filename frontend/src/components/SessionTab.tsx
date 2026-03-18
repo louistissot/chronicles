@@ -75,7 +75,7 @@ interface SessionTabProps {
   pipelineStages: PipelineStages
   speakerReview: SpeakerReviewPayload | null
   entityReview: EntityReviewPayload | null
-  transcriptReview: import('@/lib/api').TranscriptReviewPayload | null
+  factReview: import('@/lib/api').FactReviewPayload | null
   logLines: Array<{ text: string; isStderr: boolean }>
   logVersion: number
   streamingChunks: Record<PipelineStage, string>
@@ -96,6 +96,8 @@ interface SessionTabProps {
   showProcessing: boolean
   /** Navigate back to setup from processing */
   onBackToSetup: () => void
+  /** Navigate to library after pipeline completes */
+  onNavigateToLibrary?: () => void
 }
 
 // ── Main component ────────────────────────────────────────────────────────
@@ -103,13 +105,13 @@ interface SessionTabProps {
 export function SessionTab({
   onSessionStarted, onRecordingStarted, onRun, isRunning, autoNewCampaign, prefillCampaignId, prefillSeasonId,
   pendingDrop, onDropHandled, dragOver, onCancelToTitle, onFunnelComplete,
-  pipelineActive, pipelineStages, speakerReview, entityReview, transcriptReview,
+  pipelineActive, pipelineStages, speakerReview, entityReview, factReview,
   logLines, logVersion, streamingChunks, streamingVersion,
   onStop, onStopLLMStage, onSkipStage,
   recordingActive, recordingPaused, recordingSeconds,
   recordingAmplitude, recordingFileSize, amplitudeHistory,
   onPauseRecording, onResumeRecording, onStopRecording,
-  showProcessing, onBackToSetup,
+  showProcessing, onBackToSetup, onNavigateToLibrary,
 }: SessionTabProps) {
   // Initial loading
   const [initialLoading, setInitialLoading] = useState(true)
@@ -146,7 +148,6 @@ export function SessionTab({
   const [selectedArtifacts, setSelectedArtifacts] = useState<Record<string, boolean>>({
     timeline: true, summary: true, dm_notes: true, character_updates: true,
     leaderboard: true, locations: true, npcs: true, loot: true, missions: true,
-    scenes: false,
   })
 
   // Session state — reset when campaign/season changes
@@ -447,7 +448,7 @@ export function SessionTab({
         stages={pipelineStages}
         speakerReview={speakerReview}
         entityReview={entityReview}
-        transcriptReview={transcriptReview}
+        factReview={factReview}
         logLines={logLines}
         logVersion={logVersion}
         streamingChunks={streamingChunks}
@@ -466,6 +467,7 @@ export function SessionTab({
         onPauseRecording={onPauseRecording}
         onResumeRecording={onResumeRecording}
         onStopRecording={onStopRecording}
+        onNavigateToLibrary={onNavigateToLibrary}
       />
     )
   }
@@ -675,7 +677,6 @@ export function SessionTab({
                   ['npcs', 'NPCs'],
                   ['loot', 'Loot'],
                   ['missions', 'Missions'],
-                  ['scenes', 'Scenes'],
                 ] as const).map(([key, label]) => (
                   <label key={key} className="flex items-center gap-2 cursor-pointer group">
                     <input

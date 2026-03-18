@@ -22,6 +22,22 @@ import pytest
 
 with patch.dict(sys.modules, {"webview": MagicMock(), "sounddevice": MagicMock()}):
     import backend
+    _sessions_mod = sys.modules["sessions"]
+    _characters_mod = sys.modules["characters"]
+    _campaigns_mod = sys.modules["campaigns"]
+
+
+# ---------------------------------------------------------------------------
+# Isolation — redirect all registry files to tmp_path
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _isolate_storage(tmp_path, monkeypatch):
+    """Prevent tests from reading/writing real user data files."""
+    monkeypatch.setattr(_sessions_mod, "REGISTRY_FILE", tmp_path / "sessions.json")
+    monkeypatch.setattr(_characters_mod, "_CHARACTERS_FILE", tmp_path / "characters.json")
+    monkeypatch.setattr(_characters_mod, "_CHARACTERS_DIR", tmp_path / "characters")
+    monkeypatch.setattr(_campaigns_mod, "_CAMPAIGNS_FILE", tmp_path / "campaigns.json")
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +89,7 @@ def _run_continue_pipeline(api: backend.API, json_path: Path, mapping: dict):
 
     api._notify_stage = capturing_notify
     # Skip transcript_review to avoid blocking on threading.Event.wait()
-    api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"transcript_review"}
+    api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"fact_extraction", "fact_review"}
 
     with patch.object(api, "_run_llm_stages", return_value=None):
         api._continue_pipeline(json_path, mapping)
@@ -118,7 +134,7 @@ class TestContinuePipelineStageOrder:
                 order.append("notify_done")
             original_notify(stage, status, data)
         api._notify_stage = tracking_notify
-        api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"transcript_review"}
+        api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"fact_extraction", "fact_review"}
 
         real_save_all = postprocess.save_all
 
@@ -165,7 +181,7 @@ class TestContinuePipelineMissingJSON:
             original(stage, status, data)
 
         api._notify_stage = cap
-        api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"transcript_review"}
+        api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"fact_extraction", "fact_review"}
         with patch.object(api, "_run_llm_stages", return_value=None):
             api._continue_pipeline(missing, MAPPING)
 
@@ -176,8 +192,8 @@ class TestContinuePipelineMissingJSON:
     def test_llm_stages_do_not_fire(self, tmp_path):
         missing = tmp_path / "nonexistent.json"
         events = _run_continue_pipeline(_make_api(), missing, MAPPING)
-        llm_stages = {"summary", "dm_notes", "scenes", "timeline",
-                       "leaderboard", "locations", "npcs", "loot", "missions"}
+        llm_stages = {"summary", "dm_notes", "timeline", "character_updates",
+                       "glossary", "leaderboard", "locations", "npcs", "loot", "missions"}
         fired = {s for s, _ in events}
         assert not fired & llm_stages, f"LLM stages must not fire: {fired & llm_stages}"
 
@@ -203,7 +219,7 @@ class TestContinuePipelineSaveAllFailure:
             original(stage, status, data)
 
         api._notify_stage = cap
-        api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"transcript_review"}
+        api._skipped_stages = getattr(api, "_skipped_stages", set()) | {"fact_extraction", "fact_review"}
         with patch.object(backend, "save_all", side_effect=exc):
             with patch.object(api, "_run_llm_stages", return_value=None):
                 api._continue_pipeline(json_path, MAPPING)
@@ -223,8 +239,8 @@ class TestContinuePipelineSaveAllFailure:
     def test_llm_stages_do_not_fire(self, tmp_path):
         json_path = _make_whisperx_json(tmp_path)
         events = self._collect_events(json_path, OSError("disk full"))
-        llm_stages = {"summary", "dm_notes", "scenes", "timeline",
-                       "leaderboard", "locations", "npcs", "loot", "missions"}
+        llm_stages = {"summary", "dm_notes", "timeline", "character_updates",
+                       "glossary", "leaderboard", "locations", "npcs", "loot", "missions"}
         assert not {s for s, _ in events} & llm_stages
 
     def test_updating_transcript_not_done(self, tmp_path):
@@ -269,7 +285,8 @@ class TestRunSingleStage:
         session = self._make_session(tmp_path)
         new_stages = ["leaderboard", "locations", "npcs", "loot", "missions"]
         for stage in new_stages:
-            with patch.object(backend, "get_sessions", return_value=[session]):
+            with patch.object(backend, "get_sessions", return_value=[session]), \
+                 patch.object(backend, "update_session"):
                 result = api.run_single_stage("test-session-123", stage)
             assert result["ok"] is True, f"Stage '{stage}' should be valid but got: {result}"
 
@@ -290,6 +307,7 @@ class TestRunSingleStage:
         assert "transcript" in result["error"].lower()
 
     def test_sets_campaign_context(self, tmp_path):
+        import time as _time
         api = _make_api()
         session = self._make_session(tmp_path)
         campaigns_data = [{
@@ -298,8 +316,10 @@ class TestRunSingleStage:
             "seasons": [{"id": "test-season-789", "number": 1, "characters": ["char-1", "char-2"]}],
         }]
         with patch.object(backend, "get_sessions", return_value=[session]), \
-             patch.object(backend, "_get_campaigns", return_value=campaigns_data):
+             patch.object(backend, "_get_campaigns", return_value=campaigns_data), \
+             patch.object(backend, "update_session"):
             result = api.run_single_stage("test-session-123", "summary")
+            _time.sleep(0.5)  # wait for background thread to finish
         assert result["ok"] is True
         assert api._current_campaign_id == "test-campaign-456"
         assert api._current_character_ids == ["char-1", "char-2"]
@@ -333,3 +353,137 @@ class TestSaveAllMissingSource:
         missing = tmp_path / "ghost.json"
         with pytest.raises((FileNotFoundError, OSError, ValueError)):
             save_all(str(missing), {"SPEAKER_00": "Alice"}, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Adaptive fact review threshold
+# ---------------------------------------------------------------------------
+
+class TestAdaptiveFactReviewThreshold:
+    def test_no_campaign_returns_zero(self):
+        api = _make_api()
+        api._current_campaign_id = None
+        assert api._get_fact_review_threshold() == 0
+
+    def test_first_session_reviews_all(self):
+        api = _make_api()
+        api._current_campaign_id = "test-camp"
+        with patch.object(backend, "get_campaign_session_count", return_value=0):
+            assert api._get_fact_review_threshold() == 101
+
+    def test_one_session_reviews_all(self):
+        api = _make_api()
+        api._current_campaign_id = "test-camp"
+        with patch.object(backend, "get_campaign_session_count", return_value=1):
+            assert api._get_fact_review_threshold() == 101
+
+    def test_two_sessions_threshold_98(self):
+        api = _make_api()
+        api._current_campaign_id = "test-camp"
+        with patch.object(backend, "get_campaign_session_count", return_value=2):
+            assert api._get_fact_review_threshold() == 98
+
+    def test_three_sessions_threshold_95(self):
+        api = _make_api()
+        api._current_campaign_id = "test-camp"
+        with patch.object(backend, "get_campaign_session_count", return_value=3):
+            assert api._get_fact_review_threshold() == 95
+
+    def test_four_plus_sessions_threshold_90(self):
+        api = _make_api()
+        api._current_campaign_id = "test-camp"
+        for count in (4, 5, 10, 50):
+            with patch.object(backend, "get_campaign_session_count", return_value=count):
+                assert api._get_fact_review_threshold() == 90
+
+
+# ---------------------------------------------------------------------------
+# apply_fact_corrections
+# ---------------------------------------------------------------------------
+
+class TestApplyFactCorrections:
+    def test_speaker_correction(self, tmp_path):
+        """apply_fact_corrections changes speaker in specific segments."""
+        from postprocess import apply_fact_corrections
+        json_path = _make_whisperx_json(tmp_path)
+        mapping = {"SPEAKER_00": "Alice", "SPEAKER_01": "Bob"}
+        corrections = [
+            {"segment_indices": [1], "corrected_speaker": "Charlie"},
+        ]
+        txt_path, srt_path = apply_fact_corrections(
+            str(json_path), mapping, corrections, tmp_path,
+        )
+        assert txt_path is not None
+        content = txt_path.read_text(encoding="utf-8")
+        assert "Charlie" in content
+        assert "Alice" in content
+
+    def test_empty_corrections_preserves_transcript(self, tmp_path):
+        from postprocess import apply_fact_corrections
+        json_path = _make_whisperx_json(tmp_path)
+        mapping = {"SPEAKER_00": "Alice", "SPEAKER_01": "Bob"}
+        txt_path, srt_path = apply_fact_corrections(
+            str(json_path), mapping, [], tmp_path,
+        )
+        assert txt_path is not None
+        content = txt_path.read_text(encoding="utf-8")
+        assert "Alice" in content
+        assert "Bob" in content
+
+
+# ---------------------------------------------------------------------------
+# LLM stage ordering — verify the stages tuple in _run_llm_stages
+# ---------------------------------------------------------------------------
+
+class TestLLMStageOrdering:
+    """Ensure _run_llm_stages runs stages in the documented order."""
+
+    EXPECTED_ORDER = [
+        "timeline", "summary", "dm_notes", "character_updates", "glossary",
+        "leaderboard", "locations", "npcs", "loot", "missions",
+    ]
+
+    def test_stage_order_matches(self, tmp_path):
+        """The stages list in _run_llm_stages must match the documented order."""
+        api = _make_api()
+        api._glossary_context = ""
+        api._entity_context = ""
+        api._session_date = ""
+        api._facts_context = ""
+        api._skipped_stages = set()
+
+        # Create a dummy transcript file
+        txt_file = tmp_path / "transcript.txt"
+        txt_file.write_text("DM: Welcome to the session.\nAragorn: Let's go.", encoding="utf-8")
+
+        # Capture the order by collecting stage names from notify calls
+        fired_stages = []
+        original_notify = api._notify_stage
+
+        def capture(stage, status, data=None):
+            if status == "running":
+                fired_stages.append(stage)
+            original_notify(stage, status, data)
+
+        api._notify_stage = capture
+
+        # Mock all generate/save functions to no-op
+        for stage_name in self.EXPECTED_ORDER:
+            gen_name = "_generate_{}_streaming".format(stage_name)
+            save_name = "_save_{}".format(stage_name)
+            if hasattr(api, gen_name):
+                setattr(api, gen_name, MagicMock(return_value="{}"))
+            if hasattr(api, save_name):
+                setattr(api, save_name, MagicMock())
+
+        # Mock _run_illustration_stage since it runs after LLM stages
+        api._run_illustration_stage = MagicMock()
+        api._skipped_stages = {"illustration"}
+
+        with patch.object(backend, "get_sessions", return_value=[]), \
+             patch.object(backend, "_get_glossary", return_value={}), \
+             patch.object(backend, "_ensure_entities_migrated"):
+            api._run_llm_stages(str(txt_file), ["DM", "Aragorn"])
+
+        assert fired_stages == self.EXPECTED_ORDER, \
+            "Stage order mismatch: got {} expected {}".format(fired_stages, self.EXPECTED_ORDER)

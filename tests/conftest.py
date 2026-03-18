@@ -3,11 +3,54 @@ Shared pytest fixtures for DnD WhisperX tests.
 
 Provides reusable mocks for heavy dependencies (webview, sounddevice)
 so individual test files don't need to re-declare them.
+
+IMPORTANT: The _guard_real_config_files fixture (autouse=True) verifies
+that no test accidentally modifies real user config files. If a test fails
+with "REAL CONFIG FILE MODIFIED", add proper isolation fixtures.
 """
+import os
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Safety net — detect real config file corruption by tests
+# ---------------------------------------------------------------------------
+
+_REAL_CONFIG_DIR = Path.home() / ".config" / "dnd-whisperx"
+_GUARDED_FILES = [
+    _REAL_CONFIG_DIR / "sessions.json",
+    _REAL_CONFIG_DIR / "campaigns.json",
+    _REAL_CONFIG_DIR / "characters.json",
+]
+
+
+@pytest.fixture(autouse=True)
+def _guard_real_config_files():
+    """Fail the test if any real config file is modified during the test."""
+    snapshots = {}
+    for f in _GUARDED_FILES:
+        if f.exists():
+            st = f.stat()
+            snapshots[f] = (st.st_size, st.st_mtime_ns)
+    yield
+    for f in _GUARDED_FILES:
+        if f not in snapshots:
+            if f.exists():
+                pytest.fail(
+                    "REAL CONFIG FILE CREATED by test: %s — add isolation fixtures!" % f
+                )
+        else:
+            if f.exists():
+                st = f.stat()
+                old_size, old_mtime = snapshots[f]
+                if st.st_size != old_size or st.st_mtime_ns != old_mtime:
+                    pytest.fail(
+                        "REAL CONFIG FILE MODIFIED by test: %s (size %d→%d) — "
+                        "add isolation fixtures!" % (f, old_size, st.st_size)
+                    )
 
 # ---------------------------------------------------------------------------
 # Module-level mocks — prevent import errors for deps not installed in CI

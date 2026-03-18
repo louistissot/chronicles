@@ -3,11 +3,11 @@
  * Shows Info, Timeline, Transcript, and DM Notes tabs.
  */
 import { useState, useEffect, useRef } from 'react'
-import { api, type SessionEntry, type TimelineEvent, type Scene, type GlossaryEntry, type PipelineStage } from '@/lib/api'
+import { api, type SessionEntry, type TimelineEvent, type GlossaryEntry, type PipelineStage } from '@/lib/api'
 import type { PipelineStages } from '@/App'
 import {
   ArrowLeft, Loader2, ChevronDown, ChevronUp, Copy, Check,
-  Mic, FileText, FileJson, ScrollText, Film, Clock, Clapperboard,
+  Mic, FileText, FileJson, ScrollText, Clock, Clapperboard,
   FolderOpen, AlertCircle, BookOpen, Wand2, Image, Users,
   Search, Compass, Sparkles, Gem, Trophy,
   Settings2, Download, Scroll,
@@ -352,7 +352,7 @@ function GlossaryTabContent({ entries, categories, catCounts }: {
 
 // ── Tab definitions ────────────────────────────────────────────────────────────
 
-type DetailTab = 'info' | 'summary' | 'timeline' | 'transcript' | 'notes' | 'glossary' | 'locations' | 'npcs' | 'loot' | 'missions' | 'scenes'
+type DetailTab = 'info' | 'summary' | 'timeline' | 'transcript' | 'notes' | 'glossary' | 'locations' | 'npcs' | 'loot' | 'missions'
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -380,7 +380,7 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
   const [summaryContent, setSummaryContent] = useState<string | null>(null)
   const [dmNotesContent, setDmNotesContent] = useState<string | null>(null)
   const [timelineData, setTimelineData] = useState<TimelineEvent[] | null>(null)
-  const [scenesData, setScenesData] = useState<Scene[] | null>(null)
+  // scenesData removed — scenes stage no longer exists
   const [glossaryData, setGlossaryData] = useState<Record<string, GlossaryEntry> | null>(null)
   const [locationsData, setLocationsData] = useState<any[] | null>(null)
   const [npcsData, setNpcsData] = useState<any[] | null>(null)
@@ -447,23 +447,6 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
       }
     } else {
       setLoadError(result?.error || 'Failed to load timeline')
-    }
-    setLoading(false)
-  }
-
-  async function loadScenes() {
-    if (!session.scenes_path || !session.files.scenes) return
-    setLoading(true)
-    setLoadError(null)
-    const result = await api('read_file', session.scenes_path)
-    if (result?.ok) {
-      try {
-        setScenesData(JSON.parse(result.content))
-      } catch {
-        setLoadError('Failed to parse scene data.')
-      }
-    } else {
-      setLoadError(result?.error || 'Failed to load scenes')
     }
     setLoading(false)
   }
@@ -536,7 +519,6 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
     if (activeTab === 'transcript') loadTranscript()
     if (activeTab === 'notes') loadDmNotes()
     if (activeTab === 'timeline') loadTimeline()
-    if (activeTab === 'scenes') loadScenes()
     if (activeTab === 'glossary') loadGlossary()
     if (activeTab === 'locations') loadLocations()
     if (activeTab === 'npcs') loadNpcs()
@@ -590,7 +572,6 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
     { id: 'npcs',          label: 'NPCs',          available: hasTranscript,  hasData: !!session.files.npcs },
     { id: 'loot',          label: 'Loot',          available: hasTranscript,  hasData: !!session.files.loot },
     { id: 'missions',      label: 'Missions',      available: hasTranscript,  hasData: !!session.files.missions },
-    { id: 'scenes',        label: 'Scenes',        available: hasTranscript,  hasData: !!session.files.scenes },
   ]
 
   return (
@@ -765,7 +746,6 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
                   <StatusBadge available={session.files.summary}    label="Summary"         icon={BookOpen} />
                   <StatusBadge available={session.files.dm_notes}   label="DM Notes"        icon={ScrollText} />
                   <StatusBadge available={session.files.timeline}   label="Timeline"        icon={Clock} />
-                  <StatusBadge available={session.files.scenes}     label="Scene Prompts"   icon={Film} />
                   <StatusBadge available={session.files.glossary}            label="Glossary"            icon={Search} />
                   <StatusBadge available={session.files.character_updates} label="Character Updates"  icon={Users} />
                   <StatusBadge available={session.files.illustration}  label="Illustration"      icon={Image} />
@@ -854,7 +834,7 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
               {!session.files.timeline && !session.files.dm_notes && (
                 <div className="rounded-md border border-gold/10 bg-gold/3 px-4 py-3">
                   <p className="text-xs text-parchment/45 font-body leading-relaxed">
-                    Run a session through the pipeline to generate DM Notes, Scene Prompts, and a Session Timeline.
+                    Run a session through the pipeline to generate DM Notes, Timeline, and more.
                   </p>
                 </div>
               )}
@@ -1334,39 +1314,6 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
             </div>
           )}
 
-          {/* Scenes Tab */}
-          {activeTab === 'scenes' && (
-            <div className="space-y-3">
-              {loading && <LoadingSpinner label="Loading scenes…" />}
-              {!loading && scenesData && scenesData.length > 0 && (
-                <>
-                  <div className="flex items-center justify-between mb-4">
-                    <p className="text-xs text-parchment/30 uppercase tracking-widest font-body">
-                      {scenesData.length} scene{scenesData.length !== 1 ? 's' : ''}
-                    </p>
-                    {session.scenes_path && <DownloadButton path={session.scenes_path} />}
-                  </div>
-                  <div className="space-y-3">
-                    {scenesData.map((scene, i) => (
-                      <SceneCard key={i} scene={scene} index={i} />
-                    ))}
-                  </div>
-                </>
-              )}
-              {!loading && scenesData && scenesData.length === 0 && (
-                <p className="text-sm text-parchment/30 font-body py-4">No scenes found.</p>
-              )}
-              {generatingSet.has('scenes') && streamingChunks?.scenes && (
-                <div className="rounded-md border border-gold/15 bg-void/30 px-4 py-3">
-                  <div className="flex items-center gap-2 mb-2"><Loader2 className="w-3 h-3 animate-spin text-gold/50" /><span className="text-[10px] text-gold/50 uppercase tracking-wider">Generating…</span></div>
-                  <pre className="text-[10px] text-parchment/50 whitespace-pre-wrap font-mono">{streamingChunks.scenes}</pre>
-                </div>
-              )}
-              {!loading && !scenesData && !loadError && !session.files.scenes && hasTranscript && !generatingSet.has('scenes') && (
-                <GenerateArtifactButton stage="scenes" label="Scenes" generating={generatingSet} onGenerate={handleGenerate} />
-              )}
-            </div>
-          )}
 
 
         </div>
@@ -1436,42 +1383,6 @@ export function SessionDetailScreen({ session, onBack, onViewPipeline, onRefresh
               </button>
             </div>
           </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Scene card ────────────────────────────────────────────────────────────────
-
-function SceneCard({ scene, index }: { scene: Scene; index: number }) {
-  const [expanded, setExpanded] = useState(false)
-  return (
-    <div className="rounded-md border border-white/8 overflow-hidden">
-      <button
-        onClick={() => setExpanded(v => !v)}
-        className="w-full text-left px-4 py-3 bg-white/3 border-b border-white/5 group hover:bg-white/5 transition-colors"
-      >
-        <div className="flex items-start gap-3">
-          <span className="flex-none w-6 h-6 rounded-full bg-gold/10 border border-gold/20 flex items-center justify-center text-[10px] text-gold/70 font-heading mt-0.5">
-            {index + 1}
-          </span>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-heading text-parchment/85 leading-snug">{scene.title}</p>
-            <p className="text-sm text-parchment/45 font-body mt-0.5 leading-relaxed">{scene.description}</p>
-          </div>
-          <div className="flex-none mt-1 text-parchment/25">
-            {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-          </div>
-        </div>
-      </button>
-      {expanded && (
-        <div className="px-4 py-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-heading text-parchment/35 uppercase tracking-widest">Video Prompt</span>
-            <CopyButton text={scene.videoPrompt} />
-          </div>
-          <p className="text-sm text-parchment/60 font-body leading-relaxed italic">{scene.videoPrompt}</p>
         </div>
       )}
     </div>

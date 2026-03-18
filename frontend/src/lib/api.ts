@@ -105,12 +105,6 @@ export interface Campaign {
   seasons: Season[]
 }
 
-export interface Scene {
-  title: string
-  description: string
-  videoPrompt: string
-}
-
 export interface TimelineEvent {
   time: string | null
   title: string
@@ -138,7 +132,6 @@ export interface SessionEntry {
   srt_path: string | null
   summary_path: string | null
   dm_notes_path: string | null
-  scenes_path: string | null
   timeline_path: string | null
   illustration_path: string | null
   glossary_path: string | null
@@ -154,7 +147,6 @@ export interface SessionEntry {
     srt: boolean
     summary: boolean
     dm_notes: boolean
-    scenes: boolean
     timeline: boolean
     illustration: boolean
     glossary: boolean
@@ -173,7 +165,7 @@ export interface GlossaryEntry {
   description: string
 }
 
-export type PipelineStage = 'transcription' | 'saving_transcript' | 'transcript_correction' | 'speaker_mapping' | 'updating_transcript' | 'transcript_review' | 'timeline' | 'summary' | 'dm_notes' | 'character_updates' | 'glossary' | 'leaderboard' | 'locations' | 'npcs' | 'loot' | 'missions' | 'scenes' | 'illustration'
+export type PipelineStage = 'transcription' | 'saving_transcript' | 'transcript_correction' | 'speaker_mapping' | 'updating_transcript' | 'fact_extraction' | 'fact_review' | 'timeline' | 'summary' | 'dm_notes' | 'character_updates' | 'glossary' | 'leaderboard' | 'locations' | 'npcs' | 'loot' | 'missions' | 'illustration'
 export type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'needs_review'
 
 export interface SpeakerReviewPayload {
@@ -205,11 +197,30 @@ export interface EntityReviewPayload {
   session_id: string
   cards: EntityReviewCard[]
   auto_applied: Array<{ name: string; action: string; confidence: number }>
+  character_names?: string[]
 }
 
-export interface TranscriptReviewPayload {
-  transcript: string
-  txtPath: string
+export interface FactCard {
+  id: string
+  type: string
+  who: string
+  what: string
+  why: string
+  when: string
+  speaker: string
+  segment_indices: number[]
+  original_text: string
+  confidence: number
+  reasoning: string
+}
+
+export interface FactReviewPayload {
+  stage: string
+  cards: FactCard[]
+  auto_applied: Array<{ id: string; who: string; what: string; confidence: number }>
+  json_path: string
+  txt_path: string
+  character_names: string[]
 }
 
 declare global {
@@ -291,7 +302,9 @@ interface PyWebViewAPI {
     decisions: Array<{ id: string; action: 'accept' | 'edit' | 'decline'; name?: string; proposed?: Record<string, any>; edited?: Record<string, any> }>
   ): Promise<{ ok: boolean }>
 
-  complete_transcript_review(corrected_text: string | null): Promise<{ ok: boolean }>
+  complete_fact_review(
+    decisions: Array<{ id: string; action: 'accept' | 'edit' | 'decline'; segment_indices?: number[]; speaker?: string; who?: string; edited?: Record<string, any> }>
+  ): Promise<{ ok: boolean }>
 
   // Campaign management
   get_campaigns(): Promise<Campaign[]>
