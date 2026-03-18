@@ -46,6 +46,7 @@ from characters import (
     get_character as _get_character,
     get_characters as _get_characters,
     get_characters_by_ids as _get_characters_by_ids,
+    get_npcs as _get_npcs,
     set_beyond_data as _set_beyond_data,
     set_history_summary as _set_history_summary,
     update_character as _update_character,
@@ -881,6 +882,18 @@ end try
                 try:
                     gl = _get_glossary(self._current_campaign_id)
                     glossary_terms = list(gl.keys()) if gl else []
+                except Exception:
+                    pass
+                # Also include NPC names and location names (since they're no longer in glossary)
+                try:
+                    npc_names = [c.get("name", "") for c in _get_npcs(self._current_campaign_id) if c.get("name")]
+                    glossary_terms.extend(npc_names)
+                except Exception:
+                    pass
+                try:
+                    loc_entities = _get_entities(self._current_campaign_id, "location")
+                    loc_names = [e.get("name", "") for e in loc_entities if e.get("name")]
+                    glossary_terms.extend(loc_names)
                 except Exception:
                     pass
 
@@ -1788,26 +1801,62 @@ This session took place on {session_date}. Extract information ONLY from THIS se
 
     def _build_glossary_context(self):
         # type: () -> str
-        """Build a formatted glossary block for injection into LLM prompts."""
+        """Build a formatted glossary block for injection into LLM prompts.
+
+        Includes glossary terms + NPC names from characters.json + location names
+        from entity registry, so all known names are available for accurate spelling.
+        """
         if not self._current_campaign_id:
             return ""
         try:
-            glossary = _get_glossary(self._current_campaign_id)
-            if not glossary:
-                return ""
             parts = []
+
+            # Glossary terms (Faction, Item, Spell, Other — NPCs/Locations excluded)
+            glossary = _get_glossary(self._current_campaign_id)
             for term in sorted(glossary.keys()):
-                cat = glossary[term].get("category", "")
-                defn = glossary[term].get("definition", "")
-                desc = glossary[term].get("description", "")
+                info = glossary[term]
+                if not isinstance(info, dict):
+                    continue
+                cat = info.get("category", "")
+                if cat.upper() in ("NPC", "LOCATION"):
+                    continue  # These have dedicated sources below
+                defn = info.get("definition", "")
+                desc = info.get("description", "")
                 line = "- {} ({})".format(term, cat)
                 if defn:
                     line += ": {}".format(defn)
                 if desc:
-                    # Truncate description to 200 chars for context injection
                     truncated = desc[:200] + "..." if len(desc) > 200 else desc
                     line += " [Details: {}]".format(truncated)
                 parts.append(line)
+
+            # NPC names from character registry
+            npcs = _get_npcs(self._current_campaign_id)
+            for npc in npcs:
+                name = npc.get("name", "")
+                desc = npc.get("npc_description", "")
+                line = "- {} (NPC)".format(name)
+                if desc:
+                    truncated = desc[:150] + "..." if len(desc) > 150 else desc
+                    line += ": {}".format(truncated)
+                parts.append(line)
+
+            # Location names from entity registry
+            try:
+                loc_entities = _get_entities(self._current_campaign_id, "location")
+                for ent in loc_entities:
+                    name = ent.get("name", "")
+                    defn = ent.get("current", {}).get("definition", "")
+                    line = "- {} (Location)".format(name)
+                    if defn:
+                        truncated = defn[:150] + "..." if len(defn) > 150 else defn
+                        line += ": {}".format(truncated)
+                    parts.append(line)
+            except Exception:
+                pass
+
+            if not parts:
+                return ""
             return "\n\n## Campaign Glossary (known NPCs, locations, factions, items — use these for accurate naming)\n{}".format(
                 "\n".join(parts)
             )
@@ -2553,6 +2602,13 @@ Return ONLY the JSON object. No markdown fences, no explanation.
             self._notify_stage("glossary", "error", {"error": "Could not parse glossary"})
             return
 
+        # Detect flat entry: LLM sometimes returns a single entry's fields as top-level keys
+        _ENTRY_FIELDS = {"category", "definition", "description", "confidence", "reasoning"}
+        if glossary and glossary.keys() <= _ENTRY_FIELDS:
+            _log.error("glossary: LLM returned a single flat entry instead of a glossary dict — skipping")
+            self._notify_stage("glossary", "error", {"error": "LLM returned malformed glossary (flat entry instead of {term: {fields}})"})
+            return
+
         # Extract and process merge directives before saving
         merges = glossary.pop("_merges", None)
         if merges and isinstance(merges, list):
@@ -2565,6 +2621,25 @@ Return ONLY the JSON object. No markdown fences, no explanation.
                 glossary[term] = {"category": "Other", "definition": str(info), "description": "", "confidence": 100, "reasoning": ""}
             elif "description" not in info:
                 info["description"] = ""
+
+        # Route NPC and Location entries to their dedicated registries
+        npc_entries = {}  # type: Dict[str, dict]
+        location_entries = {}  # type: Dict[str, dict]
+        for term in list(glossary.keys()):
+            cat = glossary[term].get("category", "").upper()
+            if cat == "NPC":
+                npc_entries[term] = glossary.pop(term)
+            elif cat == "LOCATION":
+                location_entries[term] = glossary.pop(term)
+
+        if npc_entries:
+            _log.info("Glossary: routing %d NPC entries to character registry", len(npc_entries))
+        if location_entries:
+            _log.info("Glossary: routing %d Location entries to entity registry", len(location_entries))
+
+        # NPC entries → character registry via _sync_npcs_from_glossary
+        if npc_entries and self._current_campaign_id:
+            self._sync_npcs_from_glossary(npc_entries, self._current_campaign_id)
 
         # Determine which terms are genuinely NEW vs existing enrichments
         existing_glossary = {}  # type: dict
@@ -2754,6 +2829,75 @@ Return ONLY the JSON object. No markdown fences, no explanation.
             self._js("window._onNpcSync && window._onNpcSync({})".format(data))
             _log.info("NPC sync: %d new, %d updated", len(new_npcs), len(updated_npcs))
 
+    def _sync_npcs_from_session_data(self, npcs_data, session_id, session_date, campaign_id):
+        # type: (List[dict], str, str, str) -> int
+        """Create/enrich NPC characters from rich session NPC data.
+
+        Returns count of NPCs created.
+        """
+        from characters import (
+            find_npc_by_name, create_npc, enrich_npc, get_characters,
+        )
+        from campaigns import add_campaign_npc
+
+        # Get player character names to avoid creating NPC duplicates
+        all_chars = get_characters()
+        pc_names = set()
+        for c in all_chars:
+            if not c.get("is_npc"):
+                pc_names.add(c.get("name", "").lower().strip())
+
+        created = 0
+        for npc in npcs_data:
+            if not isinstance(npc, dict):
+                continue
+            name = (npc.get("name") or "").strip()
+            if not name or name.lower() in pc_names:
+                continue
+
+            race = npc.get("race", "")
+            role = npc.get("role", "")
+            desc = npc.get("description", "")
+            attitude = npc.get("attitude", "")
+            actions = npc.get("actions", "")
+            if isinstance(actions, list):
+                actions = " ".join(actions)
+            current_status = npc.get("current_status", "")
+
+            existing = find_npc_by_name(name, campaign_id)
+            if existing:
+                enrich_npc(
+                    existing["id"], session_id=session_id, session_date=session_date,
+                    race=race, role=role, description=desc, attitude=attitude,
+                    actions=actions, current_status=current_status, campaign_id=campaign_id,
+                )
+            else:
+                # Check globally too
+                global_existing = find_npc_by_name(name)
+                if global_existing:
+                    enrich_npc(
+                        global_existing["id"], session_id=session_id, session_date=session_date,
+                        race=race, role=role, description=desc, attitude=attitude,
+                        actions=actions, current_status=current_status, campaign_id=campaign_id,
+                    )
+                else:
+                    new_npc = create_npc(
+                        name, description=desc, campaign_id=campaign_id,
+                        race=race, role=role, attitude=attitude, current_status=current_status,
+                    )
+                    add_campaign_npc(campaign_id, new_npc["id"])
+                    # Also store initial session history
+                    if session_id:
+                        enrich_npc(
+                            new_npc["id"], session_id=session_id, session_date=session_date,
+                            race=race, role=role, description=desc, attitude=attitude,
+                            actions=actions, current_status=current_status, campaign_id=campaign_id,
+                        )
+                    created += 1
+                    _log.info("Created NPC '%s' from session data", name)
+
+        return created
+
     # ── Leaderboard ───────────────────────────────────────────────────
 
     def _generate_leaderboard_streaming(self, txt_path: str, character_names: List[str],
@@ -2852,6 +2996,11 @@ This session took place on {date}. Extract information ONLY from THIS session's 
 ## Characters
 {names}
 
+## Classification
+For each location, also classify:
+- "region_type": terrain/environment around this location. One of: sea, coast, plains, forest, jungle, mountains, desert, swamp, underground, urban, ruins, arctic
+- "location_type": what kind of place it is. One of: city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, other
+
 ## Output Format
 Return ONLY a valid JSON array (no markdown, no explanation):
 [
@@ -2861,6 +3010,8 @@ Return ONLY a valid JSON array (no markdown, no explanation):
     "connections": ["north of Connected Location 1", "2 hours walk east to Connected Location 2"],
     "relative_position": "Spatial relationship based on transcript evidence only",
     "visit_order": 1,
+    "region_type": "coast",
+    "location_type": "city",
     "confidence": 90,
     "reasoning": "Why you believe this location extraction is accurate"
   }}
@@ -3086,6 +3237,13 @@ Return ONLY a valid JSON array (no markdown, no explanation):
             decisions = self._request_entity_review("npcs", review_queue, auto_applied_summary)
             # NPCs don't go into entity registry directly, but decisions are logged
             _log.info("NPC review decisions received: %d", len(decisions))
+
+        # Sync NPCs to character registry with rich session data
+        if self._current_campaign_id:
+            session_date = getattr(self, '_session_date', '')
+            self._sync_npcs_from_session_data(
+                npcs, self._current_session_id or "", session_date, self._current_campaign_id,
+            )
 
         _log.info("NPCs saved → %s (%d NPCs)", out_path, len(npcs))
         self._notify_stage("npcs", "done", {"npcs": npcs})
@@ -3707,9 +3865,318 @@ Rules:
 
     # ── Glossary ──────────────────────────────────────────────────────────────
 
+    def get_campaign_locations(self, campaign_id: str) -> dict:
+        """Return all locations across all sessions for a campaign, deduplicated and ordered chronologically."""
+        _log.info("get_campaign_locations  campaign=%s", campaign_id)
+        try:
+            sessions = get_sessions()
+            campaign_sessions = [
+                s for s in sessions
+                if s.get("campaign_id") == campaign_id and s.get("locations_path")
+            ]
+            # Sort chronologically by date
+            campaign_sessions.sort(key=lambda s: s.get("date", ""))
+
+            # Deduplicate locations across sessions
+            seen = {}  # type: Dict[str, dict]  # lowercase name -> merged location
+            seen_order = []  # type: List[str]  # track insertion order
+
+            for session_idx, sess in enumerate(campaign_sessions):
+                lpath = sess.get("locations_path", "")
+                if not lpath or not Path(lpath).exists():
+                    continue
+                try:
+                    raw = Path(lpath).read_text(encoding="utf-8")
+                    locs = json.loads(raw)
+                except Exception:
+                    continue
+                if not isinstance(locs, list):
+                    continue
+
+                session_date = sess.get("date", "")
+                for loc in locs:
+                    if not isinstance(loc, dict):
+                        continue
+                    name = (loc.get("name") or "").strip()
+                    if not name:
+                        continue
+                    key = name.lower()
+
+                    if key in seen:
+                        # Merge: keep richest description, merge connections, update status
+                        existing = seen[key]
+                        new_desc = loc.get("description", "")
+                        if new_desc and len(new_desc) > len(existing.get("description", "")):
+                            existing["description"] = new_desc
+                        # Merge connections (union, preserve order)
+                        new_conns = loc.get("connections", [])
+                        if new_conns:
+                            existing_conns = existing.get("connections", [])
+                            existing_lower = {c.lower() for c in existing_conns}
+                            for c in new_conns:
+                                if c.lower() not in existing_lower:
+                                    existing_conns.append(c)
+                                    existing_lower.add(c.lower())
+                            existing["connections"] = existing_conns
+                        # Keep latest relative_position
+                        new_relpos = loc.get("relative_position", "")
+                        if new_relpos:
+                            existing["relative_position"] = new_relpos
+                        # Mark visited if visited in any session
+                        if loc.get("visited"):
+                            existing["visited"] = True
+                        existing["last_session_date"] = session_date
+                        existing["session_count"] = existing.get("session_count", 1) + 1
+                        # Keep latest non-empty region_type/location_type
+                        if loc.get("region_type"):
+                            existing["region_type"] = loc["region_type"]
+                        if loc.get("location_type"):
+                            existing["location_type"] = loc["location_type"]
+                    else:
+                        seen[key] = {
+                            "name": name,
+                            "description": loc.get("description", ""),
+                            "connections": loc.get("connections", []),
+                            "relative_position": loc.get("relative_position", ""),
+                            "visit_order": loc.get("visit_order"),
+                            "visited": bool(loc.get("visited")),
+                            "first_session_date": session_date,
+                            "last_session_date": session_date,
+                            "session_count": 1,
+                            "region_type": loc.get("region_type", ""),
+                            "location_type": loc.get("location_type", ""),
+                        }
+                        seen_order.append(key)
+
+            # Return in insertion order (chronological by first appearance, then visit_order)
+            locations = [seen[k] for k in seen_order]
+            return {"ok": True, "locations": locations, "session_count": len(campaign_sessions)}
+        except Exception as e:
+            _log.error("get_campaign_locations failed: %s", e)
+            return {"ok": False, "locations": [], "error": str(e)}
+
+    # ── Campaign Map ──────────────────────────────────────────────────────────
+
+    def get_campaign_map(self, campaign_id: str) -> dict:
+        """Return saved map layout, or null if not generated yet."""
+        from maps import load_map
+        data = load_map(campaign_id)
+        return {"ok": True, "map": data}
+
+    def generate_campaign_map(self, campaign_id: str) -> dict:
+        """Generate an interactive map layout from campaign locations via LLM."""
+        _log.info("generate_campaign_map  campaign=%s", campaign_id)
+        try:
+            # Get all deduplicated locations
+            loc_result = self.get_campaign_locations(campaign_id)
+            if not loc_result.get("ok"):
+                return {"ok": False, "error": "Failed to load locations"}
+            locations = loc_result.get("locations", [])
+            if not locations:
+                return {"ok": False, "error": "No locations found. Process sessions first."}
+
+            # Build location descriptions for LLM
+            loc_parts = []
+            for loc in locations:
+                part = '- **{}**'.format(loc["name"])
+                if loc.get("description"):
+                    part += ': {}'.format(loc["description"][:300])
+                if loc.get("connections"):
+                    part += '\n  Connections: {}'.format("; ".join(loc["connections"]))
+                if loc.get("relative_position"):
+                    part += '\n  Position: {}'.format(loc["relative_position"])
+                if loc.get("visited"):
+                    part += ' [VISITED]'
+                if loc.get("region_type"):
+                    part += '\n  Region: {}'.format(loc["region_type"])
+                if loc.get("location_type"):
+                    part += '\n  Type: {}'.format(loc["location_type"])
+                loc_parts.append(part)
+
+            locations_block = "\n".join(loc_parts)
+
+            prompt = """You are a fantasy cartographer creating an interactive map layout from D&D campaign locations.
+
+## Locations
+{locations}
+
+## Coordinate System
+- Use a 1000x1000 grid (both x and y range 0-1000)
+- North = lower Y values, South = higher Y values
+- East = higher X values, West = lower X values
+- Distance heuristics: "2 hours walk" ≈ 50 units, "half day" ≈ 150 units, "several days" ≈ 300+ units
+- Keep connected locations near each other, respecting directional relationships from connection text
+
+## Node Classification
+For each location, assign:
+- **region_type**: terrain around this location. One of: sea, coast, plains, forest, jungle, mountains, desert, swamp, underground, urban, ruins, arctic
+- **location_type**: what kind of place it is. One of: city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, other
+
+## Plane Detection
+- Default plane is "Material Plane"
+- Detect other planes from descriptions: Feywild, Shadowfell, Nine Hells, Abyss, Astral Sea, Ethereal Plane, Elemental planes, etc.
+- Locations on other planes should have a different "plane" value
+- Each plane has its own coordinate space (coordinates are independent per plane)
+
+## Edge Classification
+Create edges ONLY between locations that have explicit connection evidence. Classify travel_type:
+- **walk**: road, path, trail, trek, hike (default)
+- **ride**: horseback, carriage, cart
+- **sail**: ship, boat, ferry, raft, sailing
+- **fly**: griffon, carpet, broom, airship, dragon flight
+- **teleport**: teleport, misty step, dimension door, magical transport
+- **portal**: portal, gate, planar rift, interplanar travel
+- **underground**: tunnel, underdark passage, mine, sewer
+- **swim**: swimming, diving, underwater travel
+- **climb**: cliff ascent, mountain climbing, rappelling
+- **other**: any unclassified connection
+
+## Rules
+- ONLY include locations that have at least ONE connection to another location in the list
+- Do NOT include isolated locations with no connections
+- Extract edge labels from the connection text (e.g., "2 hours north" → label: "2 hours north")
+- Ensure no two nodes overlap (minimum 60 units apart)
+- Center the map: use the full 0-1000 range, don't cluster everything in one corner
+- The FIRST location listed is the party's starting point — place it prominently (e.g., center-left of the map)
+
+## Output
+Return ONLY a JSON object with this structure:
+{{
+  "nodes": [
+    {{"name": "Location Name", "x": 500, "y": 300, "plane": "Material Plane", "region_type": "coast", "location_type": "city"}}
+  ],
+  "edges": [
+    {{"from": "Location A", "to": "Location B", "label": "2 hours north", "travel_type": "walk"}}
+  ],
+  "planes": ["Material Plane"]
+}}
+
+Return ONLY the JSON. No markdown fences, no explanation.""".format(locations=locations_block)
+
+            from llm import call_llm
+            provider, api_key, model = _get_llm_config()
+            if not api_key:
+                return {"ok": False, "error": "No LLM API key configured"}
+
+            raw = call_llm(prompt, provider, api_key, model=model, max_tokens=8192)
+            map_data = self._extract_json_object(raw)
+            if not map_data:
+                _log.error("generate_campaign_map: failed to parse LLM output")
+                return {"ok": False, "error": "Failed to parse map layout from LLM"}
+
+            # Validate structure
+            if "nodes" not in map_data or "edges" not in map_data:
+                return {"ok": False, "error": "Invalid map structure from LLM"}
+
+            # Ensure planes list exists
+            if "planes" not in map_data:
+                planes = list(set(n.get("plane", "Material Plane") for n in map_data["nodes"]))
+                map_data["planes"] = planes if planes else ["Material Plane"]
+
+            # Add metadata
+            map_data["generated_at"] = datetime.now().isoformat()
+
+            # Save
+            from maps import save_map
+            save_map(campaign_id, map_data)
+
+            _log.info("generate_campaign_map: %d nodes, %d edges, %d planes",
+                       len(map_data["nodes"]), len(map_data["edges"]), len(map_data["planes"]))
+            return {"ok": True, "map": map_data}
+        except Exception as e:
+            _log.error("generate_campaign_map failed: %s", e)
+            return {"ok": False, "error": str(e)}
+
+    def update_map_positions(self, campaign_id: str, positions: dict) -> dict:
+        """Persist manual node position changes."""
+        from maps import update_node_positions
+        ok = update_node_positions(campaign_id, positions)
+        return {"ok": ok}
+
+    def get_location_events(self, campaign_id: str, location_name: str) -> dict:
+        """Get per-session events for a specific location."""
+        _log.info("get_location_events  campaign=%s  location=%s", campaign_id, location_name)
+        try:
+            sessions = get_sessions()
+            campaign_sessions = [
+                s for s in sessions
+                if s.get("campaign_id") == campaign_id
+            ]
+            campaign_sessions.sort(key=lambda s: s.get("date", ""))
+
+            loc_lower = location_name.lower().strip()
+            result_sessions = []
+
+            for sess in campaign_sessions:
+                session_entry = {
+                    "session_id": sess.get("id", ""),
+                    "session_date": sess.get("date", ""),
+                    "session_name": sess.get("display_name", sess.get("title", "")),
+                    "description": "",
+                    "npcs": [],
+                    "events": [],
+                }
+
+                found = False
+
+                # Check locations.json
+                lpath = sess.get("locations_path", "")
+                if lpath and Path(lpath).exists():
+                    try:
+                        locs = json.loads(Path(lpath).read_text(encoding="utf-8"))
+                        for loc in locs:
+                            if isinstance(loc, dict) and loc.get("name", "").lower().strip() == loc_lower:
+                                session_entry["description"] = loc.get("description", "")
+                                found = True
+                                break
+                    except Exception:
+                        pass
+
+                # Check npcs.json for NPCs at/near this location
+                npath = sess.get("npcs_path", "")
+                if npath and Path(npath).exists():
+                    try:
+                        npcs = json.loads(Path(npath).read_text(encoding="utf-8"))
+                        for npc in npcs:
+                            if isinstance(npc, dict):
+                                # Check if NPC description mentions this location
+                                desc = (npc.get("description", "") + " " + npc.get("actions", "")).lower()
+                                if loc_lower in desc or location_name.lower() in desc:
+                                    session_entry["npcs"].append(npc.get("name", "Unknown"))
+                    except Exception:
+                        pass
+
+                # Check timeline.json for events mentioning location
+                tpath = sess.get("timeline_path", "")
+                if tpath and Path(tpath).exists():
+                    try:
+                        timeline = json.loads(Path(tpath).read_text(encoding="utf-8"))
+                        for event in timeline:
+                            if isinstance(event, dict):
+                                event_text = event.get("description", "") or event.get("event", "")
+                                if location_name.lower() in event_text.lower():
+                                    session_entry["events"].append(event_text)
+                    except Exception:
+                        pass
+
+                if found or session_entry["npcs"] or session_entry["events"]:
+                    result_sessions.append(session_entry)
+
+            return {"ok": True, "location_name": location_name, "sessions": result_sessions}
+        except Exception as e:
+            _log.error("get_location_events failed: %s", e)
+            return {"ok": False, "error": str(e)}
+
+    # ── Glossary ──────────────────────────────────────────────────────────────
+
     def get_campaign_glossary(self, campaign_id: str) -> dict:
         _log.debug("get_campaign_glossary  id=%s", campaign_id)
-        return _get_glossary(campaign_id)
+        # Filter out NPC and Location entries — they have dedicated views
+        glossary = _get_glossary(campaign_id)
+        return {
+            term: info for term, info in glossary.items()
+            if isinstance(info, dict) and info.get("category", "").upper() not in ("NPC", "LOCATION")
+        }
 
     def update_campaign_glossary(self, campaign_id: str, glossary: dict) -> dict:
         _log.info("update_campaign_glossary  id=%s  terms=%d", campaign_id, len(glossary))
@@ -3718,6 +4185,106 @@ Rules:
             return {"ok": ok}
         except Exception as e:
             _log.error("update_campaign_glossary failed: %s", e)
+            return {"ok": False, "error": str(e)}
+
+    def rebuild_campaign_glossary(self, campaign_id: str) -> dict:
+        """Rebuild campaign glossary from all session glossary files.
+
+        Routes NPC entries to character registry (with rich session data),
+        routes Location entries to entity registry, and keeps only
+        Faction/Item/Spell/Other in the glossary.
+        """
+        _log.info("rebuild_campaign_glossary  campaign=%s", campaign_id)
+        try:
+            sessions = get_sessions()
+            campaign_sessions = [s for s in sessions if s.get("campaign_id") == campaign_id]
+            # Sort chronologically
+            campaign_sessions.sort(key=lambda s: s.get("date", ""))
+
+            # Clear campaign glossary
+            _update_glossary(campaign_id, {})
+
+            total_terms = 0
+            total_npcs = 0
+
+            for s in campaign_sessions:
+                session_id = s.get("id", "")
+                session_date = s.get("date", "")
+
+                # 1) Rebuild glossary from glossary files (excluding NPC/Location)
+                gpath = s.get("glossary_path", "")
+                if gpath and Path(gpath).exists():
+                    try:
+                        raw = Path(gpath).read_text(encoding="utf-8")
+                        session_glossary = json.loads(raw)
+                    except Exception as e:
+                        _log.warning("rebuild: skipping glossary %s: %s", gpath, e)
+                        session_glossary = None
+
+                    if isinstance(session_glossary, dict):
+                        _ENTRY_FIELDS = {"category", "definition", "description", "confidence", "reasoning"}
+                        if not (session_glossary.keys() <= _ENTRY_FIELDS):
+                            # Strip confidence/reasoning + filter out NPC/Location
+                            clean = {}  # type: Dict[str, dict]
+                            for term, info in session_glossary.items():
+                                if term.startswith("_"):
+                                    continue
+                                if isinstance(info, dict):
+                                    cat = info.get("category", "").upper()
+                                    if cat in ("NPC", "LOCATION"):
+                                        continue  # Routed to dedicated registries
+                                    clean[term] = {k: v for k, v in info.items() if k not in ("confidence", "reasoning")}
+                                else:
+                                    clean[term] = {"category": "Other", "definition": str(info), "description": ""}
+                            if clean:
+                                added, updated = _smart_merge_glossary(campaign_id, clean)
+                                total_terms += added
+
+                # 2) Sync NPCs from session NPC data (rich source)
+                npath = s.get("npcs_path", "")
+                if npath and Path(npath).exists():
+                    try:
+                        raw = Path(npath).read_text(encoding="utf-8")
+                        npcs_data = json.loads(raw)
+                        if isinstance(npcs_data, list):
+                            created = self._sync_npcs_from_session_data(
+                                npcs_data, session_id, session_date, campaign_id,
+                            )
+                            total_npcs += created
+                    except Exception as e:
+                        _log.warning("rebuild: skipping npcs %s: %s", npath, e)
+
+                # 3) Fallback: sync NPCs from glossary NPC entries (for sessions without npcs.json)
+                if not npath or not Path(npath).exists():
+                    if gpath and Path(gpath).exists():
+                        try:
+                            raw = Path(gpath).read_text(encoding="utf-8")
+                            sg = json.loads(raw)
+                            if isinstance(sg, dict):
+                                npc_glossary = {t: i for t, i in sg.items()
+                                                if isinstance(i, dict) and i.get("category", "").upper() == "NPC"}
+                                if npc_glossary:
+                                    npc_before = len([c for c in _get_characters() if c.get("is_npc")])
+                                    self._sync_npcs_from_glossary(npc_glossary, campaign_id)
+                                    npc_after = len([c for c in _get_characters() if c.get("is_npc")])
+                                    total_npcs += npc_after - npc_before
+                        except Exception:
+                            pass
+
+            final_glossary = _get_glossary(campaign_id)
+            # Strip any remaining NPC/Location entries from the campaign glossary
+            filtered = {t: i for t, i in final_glossary.items()
+                        if isinstance(i, dict) and i.get("category", "").upper() not in ("NPC", "LOCATION")}
+            if len(filtered) != len(final_glossary):
+                _update_glossary(campaign_id, filtered)
+                _log.info("rebuild: stripped %d NPC/Location entries from campaign glossary",
+                          len(final_glossary) - len(filtered))
+
+            _log.info("rebuild_campaign_glossary: done. %d glossary terms, %d NPCs created",
+                       len(filtered), total_npcs)
+            return {"ok": True, "terms": len(filtered), "npcs_created": total_npcs}
+        except Exception as e:
+            _log.error("rebuild_campaign_glossary failed: %s", e)
             return {"ok": False, "error": str(e)}
 
     # ── Session Library ───────────────────────────────────────────────────────

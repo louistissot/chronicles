@@ -5,18 +5,19 @@ import { SettingsTab } from '@/components/SettingsTab'
 import { CampaignsTab, CreateCampaignForm } from '@/components/CampaignsTab'
 import { CharactersTab } from '@/components/CharactersTab'
 import { GlossaryTab } from '@/components/GlossaryTab'
+import { MapsTab } from '@/components/MapsTab'
 import { ChronicleTab } from '@/components/ChronicleTab'
 import { TitleScreen, type TitleChoice } from '@/components/TitleScreen'
 import { api, type PipelineStage, type StageStatus, type SpeakerReviewPayload, type EntityReviewPayload, type FactReviewPayload } from '@/lib/api'
 import type { Campaign, Character } from '@/lib/api'
-import { Scroll, Archive, Sun, Moon, Users, Settings, Shield, ChevronDown, BookOpen, Plus, ArrowLeft } from 'lucide-react'
+import { Scroll, Archive, Sun, Moon, Users, Settings, Shield, ChevronDown, BookOpen, Plus, ArrowLeft, MapPin } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const EMPTY_CHUNKS: Record<PipelineStage, string> = {
   transcription: '', saving_transcript: '', transcript_correction: '', speaker_mapping: '', updating_transcript: '', fact_extraction: '', fact_review: '', timeline: '', summary: '', dm_notes: '', character_updates: '', glossary: '', leaderboard: '', locations: '', npcs: '', loot: '', missions: '', illustration: '',
 }
 
-type Tab = 'characters' | 'library' | 'glossary' | 'chronicle'
+type Tab = 'characters' | 'library' | 'maps' | 'glossary' | 'chronicle'
 
 export interface StageState {
   status: StageStatus
@@ -61,6 +62,7 @@ export type AppState = {
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'characters', label: 'Characters', icon: Users },
   { id: 'library',    label: 'Library',    icon: Archive },
+  { id: 'maps',       label: 'Maps',       icon: MapPin },
   { id: 'glossary',   label: 'Glossary',   icon: BookOpen },
   { id: 'chronicle',  label: 'Chronicles', icon: Scroll },
 ]
@@ -732,6 +734,9 @@ export default function App() {
                 streamingVersion={streamingVersion}
                 onNavigateToCharacter={handleNavigateToCharacter}
               />
+            )}
+            {activeTab === 'maps' && (
+              <MapsTab campaignId={activeCampaignId} campaignName={activeCampaignName} />
             )}
             {activeTab === 'glossary' && (
               <GlossaryTab campaignId={activeCampaignId} campaignName={activeCampaignName} />

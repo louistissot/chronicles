@@ -32,8 +32,12 @@ src/
 │   ├── HorizontalTimeline.tsx   Scrollable timeline rail. Used by SessionDetail + ChronicleTab.
 │   ├── CampaignsTab.tsx         Campaign CRUD. Self-contained. Sub-components inline.
 │   ├── CharactersTab.tsx        Character list + CharacterDetail with profile/history/portraits.
+│   │                            NPCs show enriched data: race, role, attitude, status, session history.
 │   ├── LibraryTab.tsx           Session list → SessionDetailScreen on click.
-│   ├── GlossaryTab.tsx          Campaign glossary editor. Category pills, search, CRUD.
+│   ├── MapsTab.tsx              Interactive campaign map (React Flow) + location list toggle.
+│   │                            Custom LocationNode with golden icons per location_type.
+│   │                            Plane tabs, draggable nodes, detail panel, edge styles per travel_type.
+│   ├── GlossaryTab.tsx          Campaign glossary editor. Faction/Item/Spell/Other only (NPC/Location routed out).
 │   ├── ChronicleTab.tsx         Season digest + timeline generator via LLM.
 │   ├── SessionDetailScreen.tsx  Session detail: Info/Summary/Timeline/Transcript/DM Notes/
 │   │                            Glossary/Locations/NPCs/Loot/Missions/Illustration.
@@ -112,7 +116,7 @@ Setup mode (campaign/season/audio) or InlinePipelineView (processing). Recording
 ## Common Gotchas
 
 - **`streamingVersion` prop**: must be in both InlinePipelineView's type declaration and destructuring.
-- **`Tab` type**: `'characters' | 'library' | 'glossary' | 'chronicle'`. New tabs need: type + TABS array + render block. SessionTab is overlay, not tab.
+- **`Tab` type**: `'characters' | 'library' | 'maps' | 'glossary' | 'chronicle'`. New tabs need: type + TABS array + render block. SessionTab is overlay, not tab.
 - **`showNewSession` state**: controls fullscreen overlay. Pipeline continues in background when dismissed.
 - **Light/dark mode**: `.light` class on `documentElement`. CSS vars in `index.css` under `:root` (dark) and `.light`.
 - **`api()` stubs**: many calls return null in Vite dev mode. Full testing requires `python3.9 main.py`.
