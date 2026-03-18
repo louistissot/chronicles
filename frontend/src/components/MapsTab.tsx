@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react'
 import {
   ReactFlow, Background, Controls, MiniMap,
   type Node, type Edge, type NodeProps, type OnNodeDrag,
@@ -23,7 +23,7 @@ const LOCATION_ICONS: Record<string, React.ComponentType<{ className?: string }>
   farm: Wheat, camp: Tent, cave: Mountain, dungeon: Mountain,
   ruins: Landmark, fortress: Shield, tower: Shield,
   clearing: TreePine, bridge: Signpost, crossroads: Signpost,
-  manor: Crown, market: Store, other: MapPin,
+  manor: Crown, market: Store, shop: Store, other: MapPin,
 }
 
 // ── Region colors ───────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ const EDGE_STYLES: Record<string, { stroke: string; strokeWidth: number; strokeD
 
 // ── Custom Location Node ────────────────────────────────────────────────────
 
-function LocationNode({ data }: NodeProps) {
+const LocationNode = memo(function LocationNode({ data }: NodeProps) {
   const Icon = LOCATION_ICONS[data.location_type as string] || MapPin
   const bgColor = REGION_COLORS[data.region_type as string] || REGION_COLORS.plains
   const visited = data.visited as boolean
@@ -97,7 +97,7 @@ function LocationNode({ data }: NodeProps) {
       <Handle type="source" position={Position.Bottom} className="!bg-transparent !border-0 !w-0 !h-0" />
     </>
   )
-}
+})
 
 const nodeTypes = { location: LocationNode }
 
@@ -216,14 +216,22 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
     setMapData(null)
     setSelectedLocation(null)
     async function load() {
-      const mapResult = await api('get_campaign_map', campaignId!) as { ok: boolean; map: CampaignMap | null } | null
-      const locResult = await api('get_campaign_locations', campaignId!) as { ok: boolean; locations?: CampaignLocation[] } | null
-      if (mapResult?.ok && mapResult.map) {
-        setMapData(mapResult.map)
-        setActivePlane(mapResult.map.planes?.[0] || 'Material Plane')
+      try {
+        const mapResult = await api('get_campaign_map', campaignId!) as { ok: boolean; map: CampaignMap | null } | null
+        if (mapResult?.ok && mapResult.map) {
+          setMapData(mapResult.map)
+          setActivePlane(mapResult.map.planes?.[0] || 'Material Plane')
+        }
+      } catch {
+        // Map not generated yet — that's fine
       }
-      if (locResult?.ok && locResult.locations) {
-        setLocations(locResult.locations)
+      try {
+        const locResult = await api('get_campaign_locations', campaignId!) as { ok: boolean; locations?: CampaignLocation[] } | null
+        if (locResult?.ok && locResult.locations) {
+          setLocations(locResult.locations)
+        }
+      } catch {
+        // Locations may not exist yet
       }
       setLoaded(true)
     }
@@ -334,6 +342,16 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
     )
   }
 
+  // Memoize list view filtering
+  const filteredListLocations = useMemo(() => {
+    if (!listSearch) return locations
+    const q = listSearch.toLowerCase()
+    return locations.filter(loc =>
+      loc.name.toLowerCase().includes(q) || loc.description?.toLowerCase().includes(q) ||
+      loc.relative_position?.toLowerCase().includes(q) || loc.connections?.some(c => c.toLowerCase().includes(q))
+    )
+  }, [locations, listSearch])
+
   const selectedLoc = selectedLocation
     ? locations.find(l => l.name.toLowerCase() === selectedLocation.toLowerCase())
     : undefined
@@ -349,6 +367,23 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
             {campaignName} · {locations.length} location{locations.length !== 1 ? 's' : ''}
           </p>
         </div>
+        {viewMode === 'map' && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleGenerate}
+            disabled={generating || locations.length === 0}
+            className="h-7 text-[10px] px-3 gap-1.5"
+          >
+            {generating ? (
+              <><Loader2 className="w-3 h-3 animate-spin" />Generating...</>
+            ) : mapData ? (
+              <><RefreshCw className="w-3 h-3" />Regenerate Map</>
+            ) : (
+              <><Compass className="w-3 h-3" />Generate Map</>
+            )}
+          </Button>
+        )}
         {/* View toggle */}
         <div className="flex rounded-md border border-white/8 overflow-hidden">
           <button
@@ -372,23 +407,6 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
             <List className="w-3.5 h-3.5" />
           </button>
         </div>
-        {viewMode === 'map' && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleGenerate}
-            disabled={generating || locations.length === 0}
-            className="h-7 text-[10px] px-3 gap-1.5"
-          >
-            {generating ? (
-              <><Loader2 className="w-3 h-3 animate-spin" />Generating...</>
-            ) : mapData ? (
-              <><RefreshCw className="w-3 h-3" />Regenerate Map</>
-            ) : (
-              <><Compass className="w-3 h-3" />Generate Map</>
-            )}
-          </Button>
-        )}
       </div>
 
       {/* Plane tabs (map view only) */}
@@ -498,24 +516,16 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
                 <p className="text-xs font-body text-parchment/20">Process sessions to discover locations.</p>
               </div>
             )}
-            {(() => {
-              const filtered = listSearch
-                ? locations.filter(loc => {
-                    const q = listSearch.toLowerCase()
-                    return loc.name.toLowerCase().includes(q) || loc.description?.toLowerCase().includes(q) ||
-                      loc.relative_position?.toLowerCase().includes(q) || loc.connections?.some(c => c.toLowerCase().includes(q))
-                  })
-                : locations
-              if (filtered.length === 0 && locations.length > 0) {
-                return <p className="text-xs text-parchment/25 font-body italic py-4 text-center">No locations match this search.</p>
-              }
-              return (
-                <div className="space-y-2">
-                  {filtered.map((loc, i) => (
+            {filteredListLocations.length === 0 && locations.length > 0 && (
+              <p className="text-xs text-parchment/25 font-body italic py-4 text-center">No locations match this search.</p>
+            )}
+            {filteredListLocations.length > 0 && (
+              <div className="space-y-2">
+                {filteredListLocations.map((loc, i) => (
                     <div key={i} className="rounded-md border border-white/5 bg-void/30 px-3 py-2 hover:border-white/10 transition-colors">
                       <div className="flex items-center gap-2">
-                        {loc.visit_order != null ? (
-                          <span className="w-5 h-5 rounded-full bg-gold/15 border border-gold/25 flex items-center justify-center text-[10px] font-heading text-gold/80 flex-none">{loc.visit_order}</span>
+                        {loc.global_order != null ? (
+                          <span className="w-5 h-5 rounded-full bg-gold/15 border border-gold/25 flex items-center justify-center text-[10px] font-heading text-gold/80 flex-none">{loc.global_order}</span>
                         ) : (
                           <Compass className="w-3.5 h-3.5 text-gold/50 flex-none" />
                         )}
@@ -552,8 +562,7 @@ export function MapsTab({ campaignId, campaignName }: { campaignId: string | nul
                     </div>
                   ))}
                 </div>
-              )
-            })()}
+              )}
           </div>
         </>
       )}

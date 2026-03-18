@@ -120,6 +120,12 @@ class TestPythonModuleImports:
         assert callable(entities.process_extracted_entities)
         assert callable(entities.project_to_glossary)
 
+    def test_maps_imports(self):
+        import maps
+        assert callable(maps.load_map)
+        assert callable(maps.save_map)
+        assert callable(maps.update_node_positions)
+
     def test_no_python310_union_syntax(self):
         """
         Ensure none of the Python files use X | Y union type hints —
@@ -129,11 +135,25 @@ class TestPythonModuleImports:
         modules = [
             "campaigns", "config", "llm", "log", "sessions",
             "characters", "beyond", "postprocess",
-            "image_gen", "llm_mapper", "entities",
+            "image_gen", "llm_mapper", "entities", "maps",
         ]
         for name in modules:
             mod = sys.modules.get(name) or importlib.import_module(name)
             assert mod is not None, f"Failed to import {name}"
+
+    def test_pyinstaller_spec_includes_all_app_modules(self):
+        """Verify that DnDWhisperX.spec hiddenimports includes all app modules."""
+        from pathlib import Path
+        spec_path = Path(__file__).parent.parent / "DnDWhisperX.spec"
+        spec_content = spec_path.read_text()
+        required_modules = [
+            "config", "runner", "postprocess", "llm_mapper", "llm",
+            "sessions", "campaigns", "characters", "entities", "maps",
+            "image_gen", "backend",
+        ]
+        for mod in required_modules:
+            assert '"{}"'.format(mod) in spec_content, \
+                "Module '{}' missing from DnDWhisperX.spec hiddenimports!".format(mod)
 
 
 class TestBackendAPIShape:

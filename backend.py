@@ -16,29 +16,17 @@ import webview  # type: ignore
 
 from campaigns import (
     add_season as _add_season,
-)
-from campaigns import (
+    character_names as _extract_char_names,
+    create_campaign as _create_campaign,
+    delete_campaign as _delete_campaign,
+    get_campaigns as _get_campaigns,
     get_glossary as _get_glossary,
     merge_glossary as _merge_glossary,
     smart_merge_glossary as _smart_merge_glossary,
-    update_glossary as _update_glossary,
-)
-from campaigns import (
-    create_campaign as _create_campaign,
-)
-from campaigns import (
-    delete_campaign as _delete_campaign,
-)
-from campaigns import (
-    get_campaigns as _get_campaigns,
-)
-from campaigns import (
     update_campaign as _update_campaign,
-)
-from campaigns import (
+    update_glossary as _update_glossary,
     update_season as _update_season,
 )
-from campaigns import character_names as _extract_char_names
 from characters import (
     add_history_entry as _add_history_entry,
     create_character as _create_character,
@@ -78,13 +66,12 @@ from postprocess import (
 from runner import TranscriptionJob
 from sessions import (
     create_session_folder,
+    delete_session as _delete_session,
     get_campaign_session_count,
+    get_session_by_id as _get_session_by_id,
     get_sessions,
     register_session,
     update_session,
-)
-from sessions import (
-    delete_session as _delete_session,
 )
 from entities import (
     ensure_migrated as _ensure_entities_migrated,
@@ -98,7 +85,6 @@ from entities import (
     migrate_glossary_to_entities as _migrate_glossary,
     migrate_session_artifacts as _migrate_session_artifacts,
     process_extracted_entities as _process_entities,
-    project_to_glossary as _project_glossary,
     create_entity as _create_entity,
     update_entity as _update_entity,
 )
@@ -706,7 +692,7 @@ end try
         """Re-trigger transcription for an existing session that has audio but no transcript."""
         _log.info("retry_transcription  session_id=%s  model=%s  language=%s", session_id, model, language)
         try:
-            session = next((s for s in get_sessions() if s.get("id") == session_id), None)
+            session = _get_session_by_id(session_id)
             if not session:
                 return {"ok": False, "error": "Session not found"}
 
@@ -1546,6 +1532,9 @@ end try
             except Exception:
                 pass
         self._glossary_context = self._build_glossary_context()
+        self._entity_context = ""  # Clear to prevent cross-session bleed during single-stage reprocessing
+        self._session_date = session.get("date", "")
+        self._skip_entity_review = True  # Manual reprocess: save all items without review blocking
         self._stop_llm_stages.discard(stage)
 
         def _run():
@@ -1592,6 +1581,9 @@ end try
                 self._current_campaign_id = prev_campaign_id
                 self._current_character_ids = prev_character_ids
                 self._glossary_context = ""
+                self._entity_context = ""
+                self._session_date = ""
+                self._skip_entity_review = False
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
@@ -1882,10 +1874,9 @@ This session took place on {session_date}. Extract information ONLY from THIS se
         # Look up session date for prompt anchoring
         self._session_date = ""
         if self._current_session_id:
-            for _s in get_sessions():
-                if _s.get("id") == self._current_session_id:
-                    self._session_date = _s.get("date", "")
-                    break
+            _sess = _get_session_by_id(self._current_session_id)
+            if _sess:
+                self._session_date = _sess.get("date", "")
 
         # Ensure entity registry is migrated for this campaign
         if self._current_campaign_id:
@@ -2425,13 +2416,11 @@ This session took place on {date}. Extract information ONLY from THIS session's 
         campaign_name = ""
         season_number = 0
         if session_id:
-            from sessions import get_sessions
-            for s in get_sessions():
-                if s.get("id") == session_id:
-                    session_date = s.get("date", "")
-                    campaign_name = s.get("campaign_name", "")
-                    season_number = s.get("season_number", 0)
-                    break
+            _sess_info = _get_session_by_id(session_id)
+            if _sess_info:
+                session_date = _sess_info.get("date", "")
+                campaign_name = _sess_info.get("campaign_name", "")
+                season_number = _sess_info.get("season_number", 0)
 
         npc_name_to_id = {}  # type: Dict[str, str]
         if self._current_npc_chars:
@@ -2996,10 +2985,31 @@ This session took place on {date}. Extract information ONLY from THIS session's 
 ## Characters
 {names}
 
-## Classification
-For each location, also classify:
-- "region_type": terrain/environment around this location. One of: sea, coast, plains, forest, jungle, mountains, desert, swamp, underground, urban, ruins, arctic
-- "location_type": what kind of place it is. One of: city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, other
+## Classification — IMPORTANT: be precise, NEVER default to "other"
+For each location, classify carefully based on the description:
+
+### region_type (terrain/environment AROUND the location):
+sea, coast, plains, forest, jungle, mountains, desert, swamp, underground, urban, ruins, arctic
+- If sailing on open water → "sea". If docked at a port → "coast". If in a city/town → "urban".
+- If in a cave, mine, tunnel, or underground chamber → "underground".
+
+### location_type (what KIND of place it is — read the description carefully!):
+city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, shop, other
+- A place that SELLS things (shop, store, merchant, vendor, stall, emporium) → "shop"
+- Traveling by ship, boat, on the sea, sailing → "ship"
+- A tavern, pub, bar, inn, alehouse, rest house → "inn"
+- A church, cathedral, chapel, holy site, altar room → "temple" or "shrine"
+- A castle, fort, stronghold, garrison, guard post → "fortress"
+- A market square, bazaar, trading post → "market"
+- A private house, estate, villa, mansion → "manor"
+- A farmstead, ranch, homestead, barn → "farm"
+- An encampment, campsite, bivouac → "camp"
+- A cave, cavern, grotto, mine shaft → "cave"
+- A tower, watchtower, wizard's tower, lighthouse → "tower"
+- An ancient ruin, collapsed structure, abandoned building → "ruins"
+- A dungeon, labyrinth, underground complex → "dungeon"
+- Open water, on a vessel at sea → "ship" (NOT "other")
+- ONLY use "other" if NONE of the above categories fit at all
 
 ## Output Format
 Return ONLY a valid JSON array (no markdown, no explanation):
@@ -3031,7 +3041,7 @@ Return ONLY a valid JSON array (no markdown, no explanation):
             glossary=glossary_ctx,
             transcript=transcript,
         )
-        return self._llm_stream(prompt, "locations", max_tokens=4096)
+        return self._llm_stream(prompt, "locations", max_tokens=8192)
 
     @staticmethod
     def _strip_confidence(items):
@@ -3088,10 +3098,19 @@ Return ONLY a valid JSON array (no markdown, no explanation):
             for loc in auto_apply
         ]
 
-        if review_queue:
+        if review_queue and not getattr(self, '_skip_entity_review', False):
             _log.info("Locations: %d auto-applied, %d need review", len(auto_apply), len(review_queue))
             decisions = self._request_entity_review("locations", review_queue, auto_applied_summary)
             self._apply_entity_decisions("locations", decisions, locations_with_conf)
+        elif review_queue:
+            # Manual reprocess: auto-apply all locations without review
+            _log.info("Locations: skipping review (manual reprocess), auto-applying all %d", len(review_queue))
+            if self._current_campaign_id:
+                for loc in review_queue:
+                    try:
+                        self._apply_location_entity(loc)
+                    except Exception as e:
+                        _log.warning("Failed to apply location entity '%s': %s", loc.get("name"), e)
 
         _log.info("Locations saved → %s (%d locations)", out_path, len(locations))
         self._notify_stage("locations", "done", {"locations": locations})
@@ -3198,7 +3217,7 @@ Return ONLY a valid JSON array (no markdown, no explanation):
             glossary=glossary_ctx,
             transcript=transcript,
         )
-        return self._llm_stream(prompt, "npcs", max_tokens=4096)
+        return self._llm_stream(prompt, "npcs", max_tokens=8192)
 
     def _save_npcs(self, text: str, out_dir: Path) -> None:
         npcs = self._repair_json_array(text)
@@ -3270,29 +3289,47 @@ Return ONLY a valid JSON array (no markdown, no explanation):
 ## Session Context
 This session took place on {date}. Extract information ONLY from THIS session's transcript.
 
-## Rules
-- ONLY include items NEWLY ACQUIRED during THIS session — items that changed hands
-- Do NOT include items characters already had from previous sessions or starting equipment
-- Do NOT include items merely mentioned, discussed, or identified but not actually taken/purchased/received
-- Do NOT include items BOUGHT or PURCHASED from merchants/shops (spending money to acquire goods)
-- Do NOT include items SPENT, USED, or CONSUMED during the session (potions drunk, scrolls used, ammunition spent)
-- Only items that represent a NET GAIN to the party's inventory: looted, found, gifted, crafted, or stolen
-- "items" = physical items looted, bought, crafted, gifted, or found
-  - "item" = item name
-  - "type" = weapon, armor, potion, scroll, wondrous, mundane, etc.
-  - "magical" = true/false (only true if explicitly stated as magical)
-  - "looted_by" = character who took/received the item (or "Party" if shared)
-  - "looted_from" = source (enemy name, chest, shop, NPC gift, etc.)
-  - "when" = approximate moment in the session (e.g. "after defeating the ogre")
-  - "where" = location where the item was acquired
-  - "how" = method of acquisition (looted, bought, found, gifted, crafted, stolen)
-- "gold" = currency transactions
-  - "amount" = numeric amount
-  - "currency" = gp, sp, cp, ep, pp
-  - "gained_by" = who received it (character name or "Party")
-  - "source" = where it came from (enemy, quest reward, sale, NPC, etc.)
-  - "context" = brief description of the transaction
-- Only include items/gold explicitly mentioned in the transcript
+## What to Track
+This is a NET GAINS tracker. Only include things the party RECEIVED — never things they spent or lost.
+
+## Items — NET GAINS ONLY
+Include items that a party member RECEIVED during this session:
+- Looted from enemies, chests, or the environment
+- Found or discovered
+- Gifted by NPCs
+- Crafted during the session
+- Purchased from shops (the item is a net gain even though gold was spent)
+- Stolen
+
+Do NOT include:
+- Items the party already had from previous sessions
+- Items merely mentioned, discussed, or identified but not taken
+- Items consumed/used/spent during the session (potions drunk, scrolls used, ammo spent)
+- Items the party LOST, GAVE AWAY, or SOLD
+
+Fields per item:
+- "item" = item name
+- "type" = weapon, armor, potion, scroll, wondrous, mundane, tool, treasure, etc.
+- "magical" = true/false (only true if explicitly stated as magical)
+- "looted_by" = character who took/received the item (or "Party" if shared)
+- "looted_from" = source (enemy name, chest, shop name, NPC gift, etc.)
+- "when" = approximate moment in the session
+- "where" = location where the item was acquired
+- "how" = method: looted, bought, found, gifted, crafted, stolen
+
+## Gold/Currency — NET GAINS ONLY
+Only include gold/currency the party RECEIVED (looted, quest rewards, gifts, found treasure).
+Do NOT include gold SPENT (purchases, bribes, payments, donations, fees, tips).
+Do NOT include gold given TO NPCs. Only gold coming IN to a party member.
+
+Fields per gold entry:
+- "amount" = numeric amount (positive only)
+- "currency" = gp, sp, cp, ep, pp
+- "gained_by" = who received it (character name or "Party")
+- "source" = where it came from (enemy, quest reward, treasure chest, NPC, etc.)
+- "context" = brief description
+
+Only include items/gold explicitly mentioned in the transcript.
 
 ## Characters
 {names}
@@ -3357,7 +3394,7 @@ Return ONLY a JSON object (no markdown, no explanation):
             for it in all_loot_items if it.get("confidence", 100) >= threshold
         ]
 
-        if review_items:
+        if review_items and not getattr(self, '_skip_entity_review', False):
             _log.info("Loot: %d auto-applied, %d need review", len(auto_applied_summary), len(review_items))
             # Normalize loot items to have a "name" field for the review system
             for it in review_items:
@@ -3367,6 +3404,15 @@ Return ONLY a JSON object (no markdown, no explanation):
                     it["name"] = "Gold: {}".format(it.get("source", ""))
             decisions = self._request_entity_review("loot", review_items, auto_applied_summary)
             self._apply_entity_decisions("loot", decisions, all_loot_items)
+        elif review_items:
+            # Manual reprocess: auto-apply all loot without review
+            _log.info("Loot: skipping review (manual reprocess), auto-applying all %d", len(review_items))
+            if self._current_campaign_id:
+                for it in review_items:
+                    try:
+                        self._apply_loot_entity(it)
+                    except Exception as e:
+                        _log.warning("Failed to apply loot entity '%s': %s", it.get("item", it.get("source")), e)
 
         items_count = len(loot.get("items", []))
         gold_count = len(loot.get("gold", []))
@@ -3948,8 +3994,11 @@ Rules:
                         }
                         seen_order.append(key)
 
-            # Return in insertion order (chronological by first appearance, then visit_order)
+            # Return in insertion order (chronological by first appearance)
             locations = [seen[k] for k in seen_order]
+            # Assign global chronological visit numbers (1-based, across all sessions)
+            for idx, loc in enumerate(locations, 1):
+                loc["global_order"] = idx
             return {"ok": True, "locations": locations, "session_count": len(campaign_sessions)}
         except Exception as e:
             _log.error("get_campaign_locations failed: %s", e)
@@ -4010,7 +4059,7 @@ Rules:
 ## Node Classification
 For each location, assign:
 - **region_type**: terrain around this location. One of: sea, coast, plains, forest, jungle, mountains, desert, swamp, underground, urban, ruins, arctic
-- **location_type**: what kind of place it is. One of: city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, other
+- **location_type**: what kind of place it is. One of: city, town, village, inn, temple, ship, dock, farm, camp, cave, ruins, fortress, tower, clearing, bridge, crossroads, dungeon, shrine, market, manor, shop, other. Use "ship" for open water/sailing, "shop" for stores/vendors/merchants, "inn" for taverns/pubs. NEVER default to "other" unless nothing else fits.
 
 ## Plane Detection
 - Default plane is "Material Plane"
