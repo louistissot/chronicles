@@ -3058,7 +3058,7 @@ Return ONLY a valid JSON array (no markdown, no explanation):
             glossary=glossary_ctx,
             transcript=transcript,
         )
-        return self._llm_stream(prompt, "locations", max_tokens=4096)
+        return self._llm_stream(prompt, "locations", max_tokens=8192)
 
     @staticmethod
     def _strip_confidence(items):
@@ -3234,7 +3234,7 @@ Return ONLY a valid JSON array (no markdown, no explanation):
             glossary=glossary_ctx,
             transcript=transcript,
         )
-        return self._llm_stream(prompt, "npcs", max_tokens=4096)
+        return self._llm_stream(prompt, "npcs", max_tokens=8192)
 
     def _save_npcs(self, text: str, out_dir: Path) -> None:
         npcs = self._repair_json_array(text)
