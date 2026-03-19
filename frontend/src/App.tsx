@@ -1,4 +1,32 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, Component } from 'react'
+import type { ErrorInfo, ReactNode } from 'react'
+
+// ── Error Boundary — prevents one tab crash from killing the entire app ────
+
+interface ErrorBoundaryState { hasError: boolean; error: Error | null }
+
+class TabErrorBoundary extends Component<{ children: ReactNode; onReset?: () => void }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false, error: null }
+  static getDerivedStateFromError(error: Error) { return { hasError: true, error } }
+  componentDidCatch(error: Error, info: ErrorInfo) { console.error('Tab crashed:', error, info) }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-6">
+          <p className="text-sm font-heading text-red-400/70">Something went wrong</p>
+          <p className="text-xs font-body text-parchment/30 max-w-md">{this.state.error?.message || 'An unexpected error occurred'}</p>
+          <button
+            onClick={() => { this.setState({ hasError: false, error: null }); this.props.onReset?.() }}
+            className="mt-2 px-4 py-2 rounded-md border border-white/10 text-xs font-heading text-parchment/50 hover:border-gold/20 hover:text-gold/60 transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 import { SessionTab } from '@/components/SessionTab'
 import { LibraryTab } from '@/components/LibraryTab'
 import { SettingsTab } from '@/components/SettingsTab'
@@ -721,7 +749,7 @@ export default function App() {
 
         {/* Main 4-tab content */}
         {showMainTabs && (
-          <>
+          <TabErrorBoundary key={activeTab} onReset={() => setActiveTab('library')}>
             {activeTab === 'characters' && <CharactersTab focusCharacterId={focusCharacterId} onFocusHandled={() => setFocusCharacterId(null)} />}
             {activeTab === 'library' && (
               <LibraryTab
@@ -744,7 +772,7 @@ export default function App() {
             {activeTab === 'chronicle' && (
               <ChronicleTab campaignId={activeCampaignId} campaignName={activeCampaignName} />
             )}
-          </>
+          </TabErrorBoundary>
         )}
       </main>
 

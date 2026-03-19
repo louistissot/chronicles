@@ -839,9 +839,9 @@ class TestGenerateCampaignMap:
         with patch.object(api, "get_campaign_locations", return_value=loc_result), \
              patch.object(backend, "_get_llm_config", return_value=("anthropic", "test-key", "test-model")), \
              patch.object(api, "_extract_json_object", return_value=dict(map_data)), \
-             patch.object(_maps_mod, "save_map") as mock_save, \
+             patch.object(backend, "_save_map") as mock_save, \
              patch.object(backend, "datetime", _dt, create=True), \
-             patch.dict(sys.modules, {"llm": MagicMock(), "maps": _maps_mod}):
+             patch.dict(sys.modules, {"llm": MagicMock()}):
             result = api.generate_campaign_map("camp-1")
 
         assert result["ok"] is True

@@ -120,3 +120,6 @@ Setup mode (campaign/season/audio) or InlinePipelineView (processing). Recording
 - **`showNewSession` state**: controls fullscreen overlay. Pipeline continues in background when dismissed.
 - **Light/dark mode**: `.light` class on `documentElement`. CSS vars in `index.css` under `:root` (dark) and `.light`.
 - **`api()` stubs**: many calls return null in Vite dev mode. Full testing requires `python3.9 main.py`.
+- **React hooks before early returns**: ALL hooks (`useState`, `useEffect`, `useMemo`, `useCallback`) MUST be called BEFORE any `if (...) return` statement in a component. Moving hooks after early returns causes React error #310 and crashes the tab.
+- **TabErrorBoundary**: App.tsx wraps tab content in `TabErrorBoundary` to prevent component crashes from blanking the entire app. New tabs automatically benefit.
+- **MapCanvas separation**: React Flow code is isolated in `MapCanvas.tsx` (separate from `MapsTab.tsx`) to contain any React Flow initialization failures.

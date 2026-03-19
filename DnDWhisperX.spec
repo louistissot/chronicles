@@ -23,6 +23,7 @@ a = Analysis(
     binaries=[] + numpy_binaries + sd_binaries,
     datas=[
         (FRONTEND_DIST, "frontend_dist"),
+        ("maps.py", "."),
     ] + numpy_datas + sd_datas,
     hiddenimports=[
         # App modules
