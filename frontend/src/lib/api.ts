@@ -139,6 +139,7 @@ export interface CampaignMap {
   nodes: MapNode[]
   edges: MapEdge[]
   planes: string[]
+  rotation?: number
 }
 
 export interface LocationSessionEvent {
@@ -399,6 +400,7 @@ interface PyWebViewAPI {
   get_campaign_map(campaignId: string): Promise<{ ok: boolean; map: CampaignMap | null }>
   generate_campaign_map(campaignId: string): Promise<{ ok: boolean; map?: CampaignMap; error?: string }>
   update_map_positions(campaignId: string, positions: Record<string, { x: number; y: number }>): Promise<{ ok: boolean }>
+  update_map_rotation(campaignId: string, rotation: number): Promise<{ ok: boolean }>
   get_location_events(campaignId: string, locationName: string): Promise<{ ok: boolean; location_name?: string; sessions?: LocationSessionEvent[]; error?: string }>
 
   // Character management
