@@ -75,3 +75,16 @@ def update_node_positions(campaign_id, positions):
         save_map(campaign_id, data)
         _log.info("Updated %d node positions for campaign %s", updated, campaign_id)
     return True
+
+
+def update_map_rotation(campaign_id, rotation):
+    # type: (str, float) -> bool
+    """Persist map rotation angle (degrees). Returns True on success."""
+    data = load_map(campaign_id)
+    if not data:
+        _log.warning("update_map_rotation: no map found for campaign %s", campaign_id)
+        return False
+    data["rotation"] = rotation
+    save_map(campaign_id, data)
+    _log.info("Updated rotation to %.1f° for campaign %s", rotation, campaign_id)
+    return True

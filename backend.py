@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 import wave
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -92,6 +93,7 @@ from maps import (
     load_map as _load_map,
     save_map as _save_map,
     update_node_positions as _update_node_positions,
+    update_map_rotation as _update_map_rotation,
 )
 
 _log = get_logger("backend")
@@ -4142,6 +4144,11 @@ Return ONLY the JSON. No markdown fences, no explanation.""".format(locations=lo
     def update_map_positions(self, campaign_id: str, positions: dict) -> dict:
         """Persist manual node position changes."""
         ok = _update_node_positions(campaign_id, positions)
+        return {"ok": ok}
+
+    def update_map_rotation(self, campaign_id: str, rotation: float) -> dict:
+        """Persist map rotation angle."""
+        ok = _update_map_rotation(campaign_id, rotation)
         return {"ok": ok}
 
     def get_location_events(self, campaign_id: str, location_name: str) -> dict:

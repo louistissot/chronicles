@@ -1,22 +1,29 @@
 /**
  * MapCanvas — lazy-loaded React Flow canvas for the Maps tab.
  * Separated to avoid crashing the app if React Flow fails to load in pywebview.
+ *
+ * Features:
+ * - Terrain region illustrations (SVG patterns per region_type)
+ * - Compass rose with drag-to-rotate map rotation
+ * - Edit mode toggle (nodes locked by default, draggable in edit mode)
  */
-import { memo, useCallback, useRef } from 'react'
+import { memo, useCallback, useRef, useState } from 'react'
 import {
-  ReactFlow, ReactFlowProvider, Background, Controls, MiniMap,
+  ReactFlow, ReactFlowProvider, Background, Controls, MiniMap, Panel,
   type Node, type Edge, type NodeProps, type OnNodeDrag,
   Handle, Position,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
-  MapPin,
+  MapPin, Pencil,
   Castle, Home, Beer, Church, Ship, Anchor, Wheat, Tent,
   Mountain, Landmark, Shield, TreePine, Signpost, Crown, Store,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import type { CampaignMap, CampaignLocation } from '@/lib/api'
+import CompassRose from './CompassRose'
+import { TerrainLayer } from './TerrainPatterns'
 
 // ── Icon mapping for location_type ──────────────────────────────────────────
 
@@ -67,15 +74,21 @@ const LocationNode = memo(function LocationNode({ data }: NodeProps) {
   const Icon = LOCATION_ICONS[data.location_type as string] || MapPin
   const bgColor = REGION_COLORS[data.region_type as string] || REGION_COLORS.plains
   const visited = data.visited as boolean
+  const rotation = (data.rotation as number) || 0
+  const editMode = data.editMode as boolean
 
   return (
     <>
       <Handle type="target" position={Position.Top} className="!bg-transparent !border-0 !w-0 !h-0" />
-      <div className={cn('flex flex-col items-center gap-1 cursor-pointer transition-all hover:scale-110')}>
+      <div
+        className={cn('flex flex-col items-center gap-1 cursor-pointer transition-all hover:scale-110')}
+        style={{ transform: rotation ? `rotate(${-rotation}deg)` : undefined }}
+      >
         <div
           className={cn(
             'w-10 h-10 rounded-full flex items-center justify-center transition-all',
             visited ? 'border-2 border-gold/60 shadow-[0_0_12px_rgba(212,175,55,0.25)]' : 'border border-white/15',
+            editMode && 'border-dashed !border-gold/40',
           )}
           style={{ backgroundColor: bgColor }}
         >
@@ -110,7 +123,10 @@ interface MapCanvasProps {
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export default function MapCanvas({ mapData, locations, activePlane, campaignId, onNodeClick }: MapCanvasProps) {
+  const [rotation, setRotation] = useState(() => mapData.rotation ?? 0)
+  const [editMode, setEditMode] = useState(false)
   const dragTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const rotationTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleNodeDragStop: OnNodeDrag = useCallback((_event, node) => {
     if (!campaignId) return
@@ -119,6 +135,17 @@ export default function MapCanvas({ mapData, locations, activePlane, campaignId,
       api('update_map_positions', campaignId, {
         [node.data.label as string]: { x: node.position.x, y: node.position.y },
       })
+    }, 500)
+  }, [campaignId])
+
+  const handleRotate = useCallback((degrees: number) => {
+    setRotation(degrees)
+    // Debounce persistence
+    if (rotationTimer.current) clearTimeout(rotationTimer.current)
+    rotationTimer.current = setTimeout(() => {
+      if (campaignId) {
+        api('update_map_rotation', campaignId, degrees)
+      }
     }, 500)
   }, [campaignId])
 
@@ -143,6 +170,8 @@ export default function MapCanvas({ mapData, locations, activePlane, campaignId,
         location_type: n.location_type,
         visited: locMeta?.visited ?? false,
         session_count: locMeta?.session_count ?? 1,
+        rotation,
+        editMode,
       },
     }
   })
@@ -158,7 +187,12 @@ export default function MapCanvas({ mapData, locations, activePlane, campaignId,
         label: e.label,
         type: 'default',
         style,
-        labelStyle: { fill: 'rgba(232, 223, 192, 0.35)', fontSize: 9, fontFamily: 'Crimson Text, serif' },
+        labelStyle: {
+          fill: 'rgba(232, 223, 192, 0.35)',
+          fontSize: 9,
+          fontFamily: 'Crimson Text, serif',
+          transform: rotation ? `rotate(${-rotation}deg)` : undefined,
+        },
         labelBgStyle: { fill: 'rgba(8, 11, 20, 0.7)', fillOpacity: 0.7 },
         labelBgPadding: [4, 2] as [number, number],
         labelBgBorderRadius: 3,
@@ -167,30 +201,65 @@ export default function MapCanvas({ mapData, locations, activePlane, campaignId,
 
   return (
     <ReactFlowProvider>
-      <ReactFlow
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={nodeTypes}
-        onNodeClick={(_e, node) => onNodeClick(node.data.label as string)}
-        onNodeDragStop={handleNodeDragStop}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.2}
-        maxZoom={3}
-        proOptions={{ hideAttribution: true }}
-        style={{ background: '#080B14' }}
-      >
-        <Background color="rgba(212, 175, 55, 0.03)" gap={40} size={1} />
-        <Controls
-          showInteractive={false}
-          className="!bg-shadow !border-white/10 !shadow-none [&>button]:!bg-shadow [&>button]:!border-white/10 [&>button]:!text-parchment/50 [&>button:hover]:!bg-white/5"
-        />
-        <MiniMap
-          nodeColor={() => 'rgba(212, 175, 55, 0.3)'}
-          maskColor="rgba(8, 11, 20, 0.8)"
-          className="!bg-shadow !border-white/10"
-        />
-      </ReactFlow>
+      <div className="relative w-full h-full overflow-hidden">
+        {/* Rotated map container */}
+        <div
+          className="w-full h-full transition-transform duration-150"
+          style={{
+            transform: rotation ? `rotate(${rotation}deg)` : undefined,
+            transformOrigin: 'center center',
+          }}
+        >
+          <ReactFlow
+            nodes={flowNodes}
+            edges={flowEdges}
+            nodeTypes={nodeTypes}
+            nodesDraggable={editMode}
+            onNodeClick={(_e, node) => onNodeClick(node.data.label as string)}
+            onNodeDragStop={handleNodeDragStop}
+            fitView
+            fitViewOptions={{ padding: 0.2 }}
+            minZoom={0.2}
+            maxZoom={3}
+            proOptions={{ hideAttribution: true }}
+            style={{ background: '#080B14' }}
+          >
+            <TerrainLayer nodes={planeNodes} />
+            <Background color="rgba(212, 175, 55, 0.03)" gap={40} size={1} />
+            <MiniMap
+              nodeColor={() => 'rgba(212, 175, 55, 0.3)'}
+              maskColor="rgba(8, 11, 20, 0.8)"
+              className="!bg-shadow !border-white/10"
+            />
+          </ReactFlow>
+        </div>
+
+        {/* Controls — outside rotation so they stay axis-aligned */}
+        <div className="absolute bottom-2 left-2 z-10 flex flex-col items-center gap-2">
+          <CompassRose rotation={rotation} onRotate={handleRotate} />
+        </div>
+
+        {/* Edit mode toggle */}
+        <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
+          {editMode && (
+            <span className="text-[10px] font-heading text-gold/60 bg-void/80 px-2 py-1 rounded border border-gold/20">
+              Edit Mode — drag nodes to reposition
+            </span>
+          )}
+          <button
+            onClick={() => setEditMode(m => !m)}
+            className={cn(
+              'w-8 h-8 rounded flex items-center justify-center transition-all border',
+              editMode
+                ? 'bg-gold/20 border-gold/40 text-gold'
+                : 'bg-shadow/80 border-white/10 text-parchment/50 hover:bg-white/5',
+            )}
+            title={editMode ? 'Exit edit mode' : 'Edit mode — drag to reposition nodes'}
+          >
+            <Pencil className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
     </ReactFlowProvider>
   )
 }
